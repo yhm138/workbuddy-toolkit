@@ -410,7 +410,7 @@ if (Nt(n.host) || Ot(n) && Pt(n)) { y(e); return true; }
 ```
 HKCU\Software\Classes\workbuddy
   (default) = "URL:workbuddy"
-  shell\open\command (default) = "D:\Software\WorkBuddy\WorkBuddy.exe" "%1"
+  shell\open\command (default) = "D:\path\to\WorkBuddy\WorkBuddy.exe" "%1"
 ```
 
 所以扩展 iframe 里 `window.open("workbuddy://chat/<id>")` 的完整链路是：

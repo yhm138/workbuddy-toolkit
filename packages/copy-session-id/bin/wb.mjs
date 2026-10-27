@@ -27,7 +27,6 @@ export function candidateRoots(explicit = "") {
     if (process.env.LOCALAPPDATA) list.push(path.join(process.env.LOCALAPPDATA, "Programs", "WorkBuddy"));
     if (process.env.ProgramFiles) list.push(path.join(process.env.ProgramFiles, "WorkBuddy"));
     if (process.env["ProgramFiles(x86)"]) list.push(path.join(process.env["ProgramFiles(x86)"], "WorkBuddy"));
-    list.push("D:/Software/WorkBuddy");
   } else if (process.platform === "darwin") {
     list.push("/Applications/WorkBuddy.app/Contents");
   }
@@ -75,7 +74,6 @@ export function findExe(extra) {
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "WorkBuddy", "WorkBuddy.exe"),
     process.env.ProgramFiles && path.join(process.env.ProgramFiles, "WorkBuddy", "WorkBuddy.exe"),
     process.env["ProgramFiles(x86)"] && path.join(process.env["ProgramFiles(x86)"], "WorkBuddy", "WorkBuddy.exe"),
-    "D:\\Software\\WorkBuddy\\WorkBuddy.exe",
   ].filter(Boolean);
   for (const c of candidates) {
     try {
