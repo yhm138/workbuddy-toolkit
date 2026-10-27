@@ -1,0 +1,20 @@
+{
+  "name": "dsh-skills",
+  "description": "DSH 迁移到 WorkBuddy 的技能包：会话检索/时间线、Token 账本、配置盘点、迁移自检。",
+  "owner": {
+    "name": "port-dsh-to-workbuddy contributors",
+    "email": ""
+  },
+  "metadata": {
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "dsh-skills",
+      "description": "7 个技能补齐 WorkBuddy 里没有的 DSH 能力；配合会话桥扩展使用。",
+      "source": "./plugins/dsh-skills",
+      "category": "skill",
+      "version": "0.1.0"
+    }
+  ]
+}

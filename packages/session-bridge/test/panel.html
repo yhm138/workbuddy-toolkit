@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>fake host · 会话桥</title>
+<style>
+  body { margin: 0; font: 12px system-ui; display: flex; height: 100vh; }
+  #log { width: 320px; border-left: 1px solid #ddd; overflow: auto; padding: 8px; white-space: pre-wrap; font-family: monospace; font-size: 11px; }
+  iframe { flex: 1; border: 0; height: 100vh; }
+</style>
+</head>
+<body>
+<iframe id="panel" src="../extension/ui/index.html"></iframe>
+<div id="log"></div>
+<script>
+(function () {
+  var LOG = [];
+  function log(line) {
+    LOG.push(line);
+    document.getElementById("log").textContent = LOG.join("\n");
+  }
+  window.__HOST_LOG__ = LOG;
+
+  var SESSIONS = [
+    { id: "session-11111111-1111-4111-8111-111111111111", title: "示例会话：整理收题清单", cwd: "D:\\work\\demo-project-a", running: false, blank: false, updatedAt: Date.now() - 60000, source: "mcp" },
+    { id: "session-22222222-2222-4222-8222-222222222222", title: "示例会话：导出配置做迁移", cwd: "C:\\Users\\me\\Documents\\demo-workspace", running: true, blank: false, updatedAt: Date.now() - 3600000, source: "mcp" },
+    { id: "33333333-3333-4333-8333-333333333333", title: "示例会话：评分复核", cwd: "D:\\work\\demo-project-b", running: false, blank: false, updatedAt: Date.now() - 7200000, source: "mcp" }
+  ];
+
+  var MESSAGES = {
+    "session-22222222-2222-4222-8222-222222222222": [
+      { role: "user", text: "列出我的 DeepSeekHarness 配置，方便我在另一台电脑上同步。", time: Date.now() - 3600000, seq: 1 },
+      // DSH 每轮真的会注入这些，role 也是 user，服务端要标 injected
+      { role: "user", text: "Current runtime context. This snapshot supersedes earlier ones.", time: Date.now() - 3599000, seq: 2, injected: true },
+      { role: "user", text: "<system-reminder> A skill is a reusable set of instructions. </system-reminder>", time: Date.now() - 3599000, seq: 3, injected: true },
+      { role: "user", text: "Time sampled while preparing turn 1, step 1: 2026-10-24T11:06:32+08:00", time: Date.now() - 3599000, seq: 4, injected: true },
+      { role: "assistant", text: "一共 **15 个 bundle**、210 个插件行。`cordis.patch.yml` 是你的覆盖层。", time: Date.now() - 3500000, seq: 5 }
+    ]
+  };
+
+  var WB_ROWS = [
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      title: "示例会话：扩展机制开发范式",
+      cwd: "D:\\work\\demo-project-a",
+      updatedAt: Date.now() - 120000,
+      source: "local"
+    }
+  ];
+  // 云端是另一套 ID 空间（数字），面板要能分开列
+  var CLOUD_ROWS = [{ id: "1000000000000000001", title: "示例会话：生成项目简介", updatedAt: Date.now() - 300000, source: "cloud" }];
+  var WB_MSGS = {
+    "44444444-4444-4444-8444-444444444444": [
+      { role: "user", text: "扩展的侧栏面板怎么拿到 service？", time: Date.now() - 600000 },
+      { role: "assistant", text: "先 `$resolveLocalRpc` 拿票，再 `$invokeLocalRpcFallback` 调方法。", time: Date.now() - 590000 }
+    ]
+  };
+
+  var calls = [];
+  // 其他 harness：只读来源。面板的标签页要按可用性动态生成
+  var HARNESSES = [
+    { id: "codex", label: "Codex", readOnly: true, available: true, count: 2, resumePrefix: "codex resume", home: "C:\\Users\\demo\\.codex" },
+    { id: "claude", label: "Claude", readOnly: true, available: true, count: 1, resumePrefix: "claude --resume", home: "C:\\Users\\demo\\.claude" }
+  ];
+  var HARNESS_ROWS = {
+    codex: [
+      { id: "a1b2c3d4-0006-4a00-8000-000000000006", title: "把 README 补一节用法说明", cwd: "D:\\work\\demo", updatedAt: Date.now() - 400000, harness: "codex" },
+      { id: "a1b2c3d4-0008-4a00-8000-000000000008", title: "子 agent · Bacon", cwd: "D:\\work\\demo", updatedAt: Date.now() - 900000, harness: "codex", subagent: true }
+    ],
+    claude: [{ id: "a1b2c3d4-0005-4a00-8000-000000000005", title: "重构会话桥", cwd: "D:/work/demo", updatedAt: Date.now() - 600000, harness: "claude" }]
+  };
+  var HARNESS_MSGS = {
+    codex: {
+      "a1b2c3d4-0006-4a00-8000-000000000006": [
+        { role: "user", text: "把 README 补一节用法说明", time: Date.now() - 400000 },
+        { role: "assistant", text: "先看现有结构。", time: Date.now() - 390000 }
+      ]
+    },
+    claude: {
+      "a1b2c3d4-0005-4a00-8000-000000000005": [
+        { role: "user", text: "只读来源也要能看内容", time: Date.now() - 600000 },
+        { role: "assistant", text: "可以，扫目录就行。", time: Date.now() - 590000 }
+      ]
+    }
+  };
+  // 每次 E2E 都先踩一次「service 被回收」，验证面板能自愈
+  window.__FAIL_LISTDSH_ONCE__ = true;
+  window.__HOST_CALLS__ = calls;
+
+  function reply(port, requestId, result) {
+    port.postMessage({ type: "wb:invoke:response", requestId: requestId, result: result });
+  }
+  function fail(port, requestId, message, code) {
+    port.postMessage({ type: "wb:invoke:response", requestId: requestId, error: { message: message, code: code || "ERR" } });
+  }
+
+  function handle(port, d) {
+    if (d.type === "wb:invoke:request" && d.channel === "wb:boundary:guest-ready") {
+      log("✓ guest-ready " + JSON.stringify(d.args && d.args[0]));
+      reply(port, d.requestId, { ok: true });
+      window.__READY_AT__ = performance.now();
+      return;
+    }
+    if (d.channel === "wb:extensions:$resolveLocalRpc") {
+      log("→ resolve " + d.args[1]);
+      reply(port, d.requestId, {
+        fallbackToken: "fake-token-" + Date.now(),
+        fallbackExpiresAt: Date.now() + 300000,
+        methods: ["ping", "status", "listDsh", "listWb", "messagesDsh", "promptDsh", "cancelDsh", "createDsh", "createWb", "promptWb", "requestsWb", "readWbLocal", "harnesses", "listHarness", "readHarness", "revealPath", "copyText", "menuInject"]
+      });
+      return;
+    }
+    if (d.channel === "wb:extensions:$invokeLocalRpcFallback") {
+      var method = d.args[1], payload = d.args[2] || {};
+      calls.push({ method: method, payload: payload });
+      log("→ " + method + " " + JSON.stringify(payload).slice(0, 80));
+      // 模拟「service 已被宿主回收」：第一次 listDsh 直接按超时失败，
+      // 面板应当重取票据再试一次，而不是把错误甩给用户。
+      if (method === "listDsh" && window.__FAIL_LISTDSH_ONCE__) {
+        window.__FAIL_LISTDSH_ONCE__ = false;
+        log("✗ 模拟 service 已回收（BRIDGE_TIMEOUT）");
+        return fail(port, d.requestId, "宿主调用超时：wb:extensions:$invokeLocalRpcFallback", "BRIDGE_TIMEOUT");
+      }
+      switch (method) {
+        case "ping":
+          return reply(port, d.requestId, { ok: true, version: "0.1.0", pid: 1, defaultCwd: "D:\\work\\demo-project", endpoint: "http://127.0.0.1:8790/mcp" });
+        case "status":
+          return reply(port, d.requestId, { ok: true, version: "0.1.0", endpoint: "http://127.0.0.1:8790/mcp", defaultCwd: "D:\\work\\demo-project", tokenFound: true, online: true, tools: ["dsh_info", "session_create", "session_list", "session_prompt", "session_messages", "session_cancel"], error: "" });
+        case "listDsh":
+          return reply(port, d.requestId, { ok: true, source: "mcp", online: true, sessions: SESSIONS });
+        case "listWb":
+          var wbSource = payload.source || "all";
+          return reply(port, d.requestId, {
+            ok: true,
+            source: wbSource,
+            local: WB_ROWS.length,
+            cloud: CLOUD_ROWS.length,
+            cloudError: "",
+            conversations: wbSource === "cloud" ? CLOUD_ROWS : WB_ROWS,
+            pagination: { hasNext: false, totalPages: 1 }
+          });
+        case "readWbLocal":
+          return reply(port, d.requestId, {
+            ok: true,
+            found: false,
+            conversationId: payload.conversationId,
+            total: 0,
+            messages: []
+          });
+        case "harnesses":
+          return reply(port, d.requestId, { ok: true, harnesses: HARNESSES });
+        case "listHarness":
+          var hRows = (HARNESS_ROWS[payload.harness] || []).filter(function (row) {
+            return payload.includeSubagents || !row.subagent;
+          });
+          return reply(port, d.requestId, {
+            ok: true,
+            harness: payload.harness,
+            label: payload.harness,
+            readOnly: true,
+            rows: hRows,
+            total: hRows.length,
+            hidden: (HARNESS_ROWS[payload.harness] || []).length - hRows.length,
+            home: ""
+          });
+        case "readHarness":
+          return reply(port, d.requestId, {
+            ok: true,
+            found: true,
+            harness: payload.harness,
+            conversationId: payload.id,
+            total: ((HARNESS_MSGS[payload.harness] || {})[payload.id] || []).length,
+            messages: (HARNESS_MSGS[payload.harness] || {})[payload.id] || [],
+            resumeHint: "codex resume " + payload.id
+          });
+        case "messagesDsh":
+          return reply(port, d.requestId, { ok: true, sessionId: payload.sessionId, messages: MESSAGES[payload.sessionId] || [] });
+        case "promptDsh":
+          MESSAGES[payload.sessionId] = (MESSAGES[payload.sessionId] || []).concat([
+            { role: "user", text: payload.prompt, time: Date.now(), seq: 90 },
+            { role: "assistant", text: "收到，已排入队列。", time: Date.now() + 1000, seq: 91 }
+          ]);
+          return reply(port, d.requestId, { ok: true, sessionId: payload.sessionId, wait: false, status: "queued" });
+        case "createDsh":
+          return reply(port, d.requestId, { ok: true, sessionId: "session-new-0001", cwd: payload.cwd, prompted: false });
+        case "cancelDsh":
+          return reply(port, d.requestId, { ok: true, cancelled: true });
+        case "createWb":
+          WB_ROWS.push({ id: "conv-wb-new-0001", title: "会话桥自检", updatedAt: Date.now() });
+          return reply(port, d.requestId, { ok: true, conversationId: "conv-wb-new-0001", title: "会话桥自检", cwd: payload.cwd || "", trace: [] });
+        case "promptWb":
+          WB_MSGS[payload.conversationId] = (WB_MSGS[payload.conversationId] || []).concat([
+            { role: "user", text: payload.text, time: Date.now() },
+            { role: "assistant", text: "id=" + payload.conversationId + " project=D:/work/demo-project time=2026-10-24T11:20:00+08:00", time: Date.now() + 800 }
+          ]);
+          return reply(port, d.requestId, { ok: true, conversationId: payload.conversationId, chars: String(payload.text || "").length });
+        case "requestsWb":
+          var list = WB_MSGS[payload.conversationId] || [];
+          return reply(port, d.requestId, { ok: true, conversationId: payload.conversationId, count: list.length, shape: "{items,total}", messages: list.map(function (m, i) { return Object.assign({ index: i }, m); }) });
+        case "copyText":
+          window.__COPIED__ = payload.text;
+          return reply(port, d.requestId, { ok: true, method: "fake-clip", length: String(payload.text || "").length });
+        case "revealPath":
+          window.__REVEALED__ = payload.path;
+          return reply(port, d.requestId, { ok: true, path: payload.path });
+        case "menuInject":
+          return reply(port, d.requestId, {
+            ok: true,
+            enabled: true,
+            port: 9222,
+            connected: 1,
+            injected: 1,
+            running: true,
+            lastError: "",
+          });
+        default:
+          return fail(port, d.requestId, "未知方法 " + method, "NO_METHOD");
+      }
+    }
+    if (d.type === "wb:invoke:request") {
+      return fail(port, d.requestId, "未知通道 " + d.channel, "NO_CHANNEL");
+    }
+  }
+
+  var frame = document.getElementById("panel");
+  frame.addEventListener("load", function () {
+    var channel = new MessageChannel();
+    channel.port1.onmessage = function (ev) { handle(channel.port1, ev.data); };
+    channel.port1.start();
+    frame.contentWindow.postMessage(
+      { type: "__wb_port_init__", readyToken: "0123456789abcdef0123456789abcdef" },
+      "*",
+      [channel.port2]
+    );
+    log("→ __wb_port_init__");
+  });
+})();
+</script>
+</body>
+</html>

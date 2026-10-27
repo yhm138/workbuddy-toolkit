@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>会话菜单 · 复制 Session ID</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1b1b1f;
+    --fg-mute: #6b6b76;
+    --line: #e5e5ea;
+    --card: #f7f7f9;
+    --ok: #1a9c5b;
+    --warn: #c98a00;
+    --bad: #d64545;
+    --accent: #2f6fed;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1f; --fg: #ececf1; --fg-mute: #9a9aa6;
+      --line: #2f2f36; --card: #24242a; --accent: #6c9bff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-bottom: 1px solid var(--line);
+  }
+  header .title { font-size: 13px; font-weight: 600; letter-spacing: .2px; }
+  header .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--fg-mute); flex: none;
+  }
+  header .dot.ok { background: var(--ok); }
+  header .dot.warn { background: var(--warn); }
+  header .dot.bad { background: var(--bad); }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; color: inherit; background: transparent;
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 4px 9px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button:active { transform: translateY(1px); }
+  main { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+  .card {
+    border: 1px solid var(--line); border-radius: 9px;
+    background: var(--card); padding: 11px 13px;
+  }
+  .card h2 { margin: 0 0 7px; font-size: 12px; font-weight: 600; color: var(--fg-mute); letter-spacing: .3px; }
+  .big { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .hint { color: var(--fg-mute); font-size: 11.5px; margin-top: 5px; }
+
+  dl { display: grid; grid-template-columns: 84px 1fr; gap: 5px 10px; margin: 0; font-size: 12px; }
+  dt { color: var(--fg-mute); }
+  dd { margin: 0; word-break: break-all; }
+  code, .mono { font-family: var(--mono); font-size: 11.5px; }
+
+  .steps { margin: 6px 0 0; padding-left: 18px; color: var(--fg-mute); font-size: 11.5px; }
+  .steps li { margin: 3px 0; }
+
+  details.diag { border: 1px solid var(--line); border-radius: 9px; font-size: 11.5px; color: var(--fg-mute); }
+  details.diag summary { padding: 8px 12px; cursor: pointer; list-style: none; }
+  details.diag summary::-webkit-details-marker { display: none; }
+  details.diag .body {
+    padding: 0 12px 10px; font-family: var(--mono); font-size: 10.5px;
+    white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow: auto;
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    background: rgba(20,20,20,.9); color: #fff; font-size: 11.5px;
+    padding: 6px 12px; border-radius: 6px; opacity: 0; pointer-events: none;
+    transition: opacity .16s;
+  }
+  #toast.show { opacity: 1; }
+</style>
+<script>
+/* ------------------------------------------------------------------
+ * 宿主 Guest 通道：必须在 <head> 里尽早完成握手。
+ * 宿主在 iframe load 后推 { type:"__wb_port_init__", readyToken } + MessagePort，
+ * guest 要在 10s 内回 wb:boundary:guest-ready，否则面板显示「插件加载失败」。
+ * 这同时也是之后所有 wb:* 能力和 Local RPC 的唯一通道。
+ * ------------------------------------------------------------------ */
+(function () {
+  "use strict";
+  var G = { port: null, token: "", ready: false, seq: 0, pending: {} };
+  window.__BRIDGE__ = G;
+
+  function send(msg) {
+    try { G.port.postMessage(msg); return true; } catch (e) { return false; }
+  }
+
+  function settle(d) {
+    var p = G.pending[d.requestId];
+    if (!p) return;
+    delete G.pending[d.requestId];
+    if (p.timer) clearTimeout(p.timer);
+    if (d.error) {
+      var err = new Error((d.error && d.error.message) || "宿主调用失败");
+      err.code = d.error && d.error.code;
+      p.reject(err);
+    } else {
+      p.resolve(d.result);
+    }
+  }
+
+  G.invoke = function (channel, args, timeout) {
+    return new Promise(function (resolve, reject) {
+      if (!G.port) {
+        var noPort = new Error("宿主通道未建立");
+        noPort.code = "BRIDGE_NO_PORT";
+        return reject(noPort);
+      }
+      var id = "g-" + (++G.seq);
+      var timer = setTimeout(function () {
+        delete G.pending[id];
+        var err = new Error("宿主调用超时：" + channel);
+        err.code = "BRIDGE_TIMEOUT";
+        reject(err);
+      }, timeout || 20000);
+      G.pending[id] = { resolve: resolve, reject: reject, timer: timer };
+      if (!send({ type: "wb:invoke:request", requestId: id, channel: channel, args: args || [] })) {
+        clearTimeout(timer);
+        delete G.pending[id];
+        var err2 = new Error("无法发送宿主调用：" + channel);
+        err2.code = "BRIDGE_SEND_FAILED";
+        reject(err2);
+      }
+    });
+  };
+
+  function hello(token) {
+    var id = "ready-" + (++G.seq);
+    G.pending[id] = {
+      timer: 0,
+      resolve: function () { G.ready = true; },
+      reject: function () {},
+    };
+    if (!send({
+      type: "wb:invoke:request", requestId: id,
+      channel: "wb:boundary:guest-ready", args: [token ? { readyToken: token } : {}],
+    })) {
+      delete G.pending[id];
+    }
+  }
+
+  window.addEventListener("message", function (ev) {
+    var d = ev.data;
+    if (!d || typeof d !== "object") return;
+    if (d.type === "__wb_port_init__") {
+      if (G.port) return;
+      var port = ev.ports && ev.ports[0];
+      if (!port) return;
+      G.port = port;
+      G.token = d.readyToken || "";
+      port.addEventListener("message", function (e) {
+        var m = e && e.data;
+        if (m && m.type === "wb:invoke:response") settle(m);
+      });
+      try { port.start(); } catch (e) {}
+      hello(G.token);
+      return;
+    }
+    if (d.type === "wb:invoke:response") settle(d);
+  }, false);
+})();
+</script>
+</head>
+<body>
+<header>
+  <span class="title">会话菜单</span>
+  <span class="dot" id="dot"></span>
+  <span class="spacer"></span>
+  <button id="btnReload" title="重新读取配置并重启注入器">重新载入</button>
+  <button id="btnRefresh" title="刷新状态">↻</button>
+</header>
+
+<main>
+  <div class="card">
+    <h2>注入状态</h2>
+    <div class="big"><span class="dot ok" id="bigDot" style="width:8px;height:8px"></span><span id="headline">正在连接…</span></div>
+    <div class="hint" id="subline">读取 service 状态</div>
+  </div>
+
+  <div class="card">
+    <h2>明细</h2>
+    <dl>
+      <dt>调试端口</dt><dd id="dPort">—</dd>
+      <dt>端口来源</dt><dd id="dSource">—</dd>
+      <dt>已连窗口</dt><dd id="dConnected">—</dd>
+      <dt>注入次数</dt><dd id="dInjected">—</dd>
+      <dt>配置文件</dt><dd class="mono" id="dConfig">—</dd>
+      <dt>最近错误</dt><dd id="dError">—</dd>
+    </dl>
+  </div>
+
+  <div class="card" id="helpCard">
+    <h2>没生效时按这个顺序查</h2>
+    <ol class="steps">
+      <li>客户端启动时带没带 <code>--remote-debugging-port</code>（跑一次 <code>enable-context-menu.cmd</code>）</li>
+      <li>托盘退出、重新打开客户端（正在跑的进程改不了启动参数）</li>
+      <li>打开一次本面板（service 只在这时被 fork）</li>
+    </ol>
+    <div class="hint">命令行的 <code>node bin/context-menu.mjs status</code> 会把这三步逐条打勾。</div>
+  </div>
+
+  <details class="diag">
+    <summary>诊断日志</summary>
+    <div class="body" id="diag">—</div>
+  </details>
+</main>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+  var EXT = "workbuddy-session-menu";
+  var state = { grant: null, style: "", timer: null };
+
+  var $ = function (id) { return document.getElementById(id); };
+  function setText(id, v) { var el = $(id); if (el) el.textContent = (v === undefined || v === null || v === "") ? "—" : String(v); }
+  function log(line) {
+    var el = $("diag");
+    if (!el) return;
+    el.textContent = (el.textContent === "—" ? "" : el.textContent) + line + "\n";
+  }
+  function toast(msg) {
+    var t = $("toast");
+    if (!t) return;
+    t.textContent = msg;
+    t.classList.add("show");
+    setTimeout(function () { t.classList.remove("show"); }, 1600);
+  }
+
+  function resolveGrant() {
+    return window.__BRIDGE__.invoke("wb:extensions:$resolveLocalRpc", [EXT, "ping"], 20000)
+      .then(function (g) {
+        if (!g || !g.fallbackToken) {
+          var e = new Error("宿主没给票据（扩展没声明 service，或 service fork 失败）");
+          e.code = "NO_GRANT";
+          throw e;
+        }
+        state.grant = { token: g.fallbackToken, methods: g.methods || [] };
+        log("票据 ok，service 方法：" + (g.methods || []).join(", "));
+        return state.grant;
+      });
+  }
+
+  function call(method, payload) {
+    if (!state.grant) return resolveGrant().then(function () { return call(method, payload); });
+    return window.__BRIDGE__.invoke(
+      "wb:extensions:$invokeLocalRpcFallback",
+      [EXT, method, payload || {}, state.grant.token],
+      20000
+    );
+  }
+
+  function paint(st) {
+    var enabled = !!st.enabled;
+    var connected = Number(st.connected) || 0;
+    var injected = Number(st.injected) || 0;
+
+    var good = enabled && connected > 0;
+    $("dot").className = "dot " + (good ? "ok" : enabled ? "warn" : "bad");
+    $("bigDot").className = "dot " + (good ? "ok" : enabled ? "warn" : "bad");
+
+    var headline, sub;
+    if (!enabled) {
+      headline = "注入没有启用";
+      sub = st.portSource === "off"
+        ? "被 WORKBUDDY_MENU_INJECT=off 硬关掉了"
+        : "客户端没开调试端口 —— 先跑一次 enable-context-menu.cmd，再托盘退出重开";
+    } else if (connected > 0) {
+      headline = "已就绪";
+      sub = "右键任意会话 → 菜单里会有「复制 Session ID」";
+    } else {
+      headline = "端口开着，但还没连上窗口";
+      sub = st.lastError || "等一会儿；一直这样的话看下面的日志";
+    }
+    $("headline").textContent = headline;
+    $("subline").textContent = sub;
+
+    setText("dPort", st.port || "0");
+    setText("dSource", ({ env: "环境变量", config: "配置文件", off: "硬关闭", none: "未配置" })[st.portSource] || st.portSource);
+    setText("dConnected", connected);
+    setText("dInjected", injected);
+    setText("dConfig", st.configFile || "—");
+    setText("dError", st.lastError || "无");
+
+    $("helpCard").hidden = good;
+  }
+
+  function refresh(showToast) {
+    return call("status")
+      .then(function (st) {
+        paint(st || {});
+        if (showToast) toast("已刷新");
+      })
+      .catch(function (e) {
+        $("dot").className = "dot bad";
+        $("bigDot").className = "dot bad";
+        $("headline").textContent = "连不上 service";
+        $("subline").textContent = (e && e.message) || String(e);
+        log("status 失败：" + ((e && e.message) || e));
+      });
+  }
+
+  function start() {
+    refresh(false).then(function () {
+      if (state.timer) clearInterval(state.timer);
+      state.timer = setInterval(function () {
+        // 面板不可见时别轮询，省得白占 CPU
+        if (document.hidden) return;
+        refresh(false);
+      }, 4000);
+    });
+  }
+
+  $("btnRefresh").addEventListener("click", function () { refresh(true); });
+
+  $("btnReload").addEventListener("click", function () {
+    call("reload")
+      .then(function (st) { paint(st || {}); toast("已重新载入配置"); })
+      .catch(function (e) { toast("载入失败：" + ((e && e.message) || e)); });
+  });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start);
+  } else {
+    start();
+  }
+})();
+</script>
+</body>
+</html>

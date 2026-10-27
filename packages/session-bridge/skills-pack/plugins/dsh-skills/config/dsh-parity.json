@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-10-24T02:38:16.349Z",
+  "profile": "dsh-profile-desktop",
+  "dshVersion": "0.2.1-rc.2",
+  "source": "<HOME>\\Documents\\deepseek-harness\\default-workspace\\dsh-config-export\\profile\\desktop",
+  "bundles": [
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-web-app",
+    "dsh-conversation-navigator",
+    "dsh-sessions-manager",
+    "@deepseek-ai/dsh-experimental-inspector-profile",
+    "@deepseek-ai/dsh-subagent-codex",
+    "@deepseek-ai/dsh-experimental-plugin-market-bundle",
+    "@deepseek-ai/dsh-experimental-session-search",
+    "@deepseek-ai/dsh-experimental-terminal-bundle",
+    "@hyzyn/dsh-search",
+    "dsh-as-mcp",
+    "@michengai/dsh-codex-ui",
+    "@laoyuehanni/dsh-token-usage",
+    "@deepseek-ai/dsh-experimental-agent-team-profile",
+    "dsh-client-auto-continue"
+  ],
+  "parity": {
+    "score": 67,
+    "counts": {
+      "native": 8,
+      "bundle": 6,
+      "partial": 7,
+      "manual": 2,
+      "none": 3
+    }
+  },
+  "settings": {
+    "locale": "zh",
+    "model": {
+      "provider": "deepseek-account",
+      "model": "deepseek-flash",
+      "reasoningEffort": "max"
+    },
+    "permissionPreset": "danger-full-access",
+    "permissions": {
+      "read-only": {
+        "sandbox": "read-only",
+        "approval": "ask"
+      },
+      "workspace-write": {
+        "sandbox": "workspace-write",
+        "approval": "ask"
+      },
+      "danger-full-access": {
+        "sandbox": "danger-full-access",
+        "approval": "never"
+      }
+    },
+    "concurrency": {
+      "maxParallelToolCalls": 20,
+      "maxActiveSubagents": 16
+    },
+    "chat": {
+      "transcriptView": "detailed",
+      "performanceUsage": "detailed"
+    },
+    "conversation": {
+      "busyEnter": "steer"
+    },
+    "onboarding": {
+      "version": 1,
+      "step": "done",
+      "purpose": "development",
+      "process": "standard",
+      "completion": "completed",
+      "usage": "detailed",
+      "developerTools": true
+    },
+    "tokenUsage": {
+      "pricingRegion": "domestic",
+      "recordCompaction": true,
+      "quota": {
+        "enabled": true
+      }
+    },
+    "autoContinue": {
+      "paused": false,
+      "showComposerToggle": true,
+      "locale": "zh",
+      "graceMs": 30000,
+      "cooldownMs": 30000,
+      "maxConsecutive": 30,
+      "backoffFactor": 2,
+      "backoffMaxMs": 300000,
+      "classify": true,
+      "guardTools": true,
+      "resumeCompletedTurns": false
+    },
+    "pluginMarket": {
+      "indexes": [
+        "https://cdn.jsdelivr.net/npm/dsh-plugin-catalog/index.json",
+        "https://bruc3van.com/dsh-plugins/index.json",
+        "https://awesome-dsh-plugin.com/index.json"
+      ]
+    },
+    "mcp": {
+      "enabled": true,
+      "url": "http://127.0.0.1:8790/mcp",
+      "tools": {
+        "workspace": true,
+        "session": true,
+        "files": false,
+        "shell": false,
+        "agentTools": false
+      },
+      "approval": {
+        "policy": "inherit"
+      },
+      "client": {
+        "url": "http://127.0.0.1:8790/mcp",
+        "transport": "streamable-http",
+        "toolCallTimeoutMs": 660000,
+        "reconnect": {
+          "enabled": true,
+          "initialDelayMs": 1000,
+          "maxDelayMs": 15000,
+          "maxAttempts": 1000
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "workbuddy-session-menu",
+  "name": "会话菜单",
+  "version": "1.0.0",
+  "description": "在 WorkBuddy 的会话右键菜单里加一项「复制 Session ID」。",
+  "ui": {
+    "entry": {
+      "title": "会话菜单",
+      "icon": "./icon.svg",
+      "url": "./ui/index.html",
+      "placement": "sidebar",
+      "openInWindow": false,
+      "keepAlive": true
+    },
+    "onLoadError": {
+      "errorMessage": "面板没加载出来。多半是刚更新过扩展但没重启客户端：请右下角托盘右键退出 WorkBuddy，再重新打开。"
+    }
+  },
+  "service": {
+    "entry": "./server/index.cjs",
+    "process": "fork"
+  }
+}

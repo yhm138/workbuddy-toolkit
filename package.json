@@ -1,0 +1,13 @@
+﻿{
+  "name": "workbuddy-toolkit",
+  "private": true,
+  "version": "1.0.0",
+  "description": "WorkBuddy 扩展工具集：会话桥、复制 Session ID、云端会话回放",
+  "license": "MIT",
+  "scripts": {
+    "test": "npm --prefix packages/session-bridge test && npm --prefix packages/copy-session-id test && npm --prefix packages/cloud-sessions test",
+    "test:bridge": "npm --prefix packages/session-bridge test",
+    "test:menu": "npm --prefix packages/copy-session-id test",
+    "test:cloud": "npm --prefix packages/cloud-sessions test"
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# 本机运行产物
+backups/
+*.bak-*
+.probe/
+
+# 打包产物（由 tools/pack.mjs 生成，发到 Release，不进仓库）
+dist/

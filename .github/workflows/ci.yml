@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    # 宿主是 Windows 客户端：.lnk 读写、tasklist、HKCU 环境变量都是 Windows 专有路径。
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    env:
+      # 不带这个，测试可能连上正在运行的宿主客户端。
+      WORKBUDDY_MENU_INJECT: "off"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 显式用 bash：Windows runner 默认 shell 不展开 glob，
+      # node 会收到字面量 test/*.test.mjs，然后报 Could not find。
+      - name: 会话桥
+        shell: bash
+        working-directory: packages/session-bridge
+        run: node --test test/*.test.mjs
+
+      - name: 复制 Session ID
+        shell: bash
+        working-directory: packages/copy-session-id
+        run: node --test test/*.test.mjs
+
+  cloud-sessions:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/cloud-sessions
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 语法检查
+        run: |
+          for f in bin/*.js src/*.js test/*.cjs server/*.cjs; do node --check "$f"; done
+          node -e "
+            const fs = require('fs');
+            const html = fs.readFileSync('ui/index.html', 'utf8');
+            const m = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+            fs.writeFileSync('/tmp/ui.js', m[m.length - 1][1]);
+          "
+          node --check /tmp/ui.js
+
+      - name: 清单校验
+        run: |
+          node -e "
+            const a = require('./extension.json'), b = require('./distribution.json');
+            const p = require('./package.json');
+            if (a.id !== b.extensionId) throw new Error('extensionId 不一致');
+            if (a.version !== b.version) throw new Error('version 不一致');
+            if (a.version !== p.version) throw new Error('package.json version 不一致');
+            if (a.ui.entry.placement !== 'sidebar') throw new Error('placement 必须是 sidebar');
+            const svc = require('./server/index.cjs').VERSION;
+            if (svc !== p.version) throw new Error('server VERSION 不一致: ' + svc + ' vs ' + p.version);
+            console.log('manifest ok', a.id, a.version);
+          "
+
+      - name: service 自测（假网关，不需要登录态）
+        run: node test/service-acp.js
+
+      - name: CLI 自检
+        run: node bin/wbcs.js --help
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: .cmd 必须是纯 ASCII
+        # cmd.exe 按 GBK 解析批处理，非 ASCII 会被拆成非法命令。
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            if LC_ALL=C grep -qP '[^\x00-\x7F]' "$f"; then
+              echo "::error file=$f::含非 ASCII 字符"
+              fail=1
+            fi
+          done < <(find packages -name '*.cmd')
+          exit $fail
+
+      - name: 不许把本机绝对路径写进仓库
+        run: |
+          if grep -rniP 'C:[/\\]Users[/\\](?!Public\b|<|me\b)[A-Za-z]|D:[/\\](?!your|work|path)[A-Za-z]' \
+               --include='*.md' --include='*.mjs' --include='*.cjs' \
+               --include='*.json' --include='*.js' --include='*.html' packages ; then
+            echo "::error::仓库里出现了本机绝对路径"
+            exit 1
+          fi
+          echo "干净"

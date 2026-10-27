@@ -1,0 +1,11 @@
+# 统一换行，避免 Windows 工作区提交出全文件 diff
+* text=auto eol=lf
+
+# 双击要用的脚本与说明：cmd.exe 按字节读批处理，老记事本不认 LF
+*.cmd text eol=crlf
+使用说明.txt text eol=crlf
+
+*.zip binary
+
+# 给 GitHub 的语言统计留个准头
+extension/ui/*.html linguist-detectable=true

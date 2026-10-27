@@ -1,0 +1,32 @@
+{
+  "name": "workbuddy-session-menu",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "在 WorkBuddy 的会话右键菜单里加一项「复制 Session ID」——宿主扩展 + 命令行开关",
+  "bin": {
+    "wb-session-menu": "./bin/context-menu.mjs"
+  },
+  "engines": {
+    "node": ">=20.10"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "setup": "node bin/setup.mjs",
+    "status": "node bin/setup.mjs --status",
+    "uninstall": "node bin/setup.mjs --uninstall",
+    "pack": "node tools/pack.mjs",
+    "verify": "node tools/verify.mjs",
+    "install:extension": "node bin/install.mjs",
+    "enable": "node bin/context-menu.mjs enable",
+    "disable": "node bin/context-menu.mjs disable"
+  },
+  "keywords": [
+    "workbuddy",
+    "extension",
+    "context-menu",
+    "session-id",
+    "cdp"
+  ],
+  "license": "MIT"
+}

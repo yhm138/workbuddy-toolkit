@@ -1,0 +1,1485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>会话桥</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f6f6f7;
+    --bg-hover: rgba(0,0,0,.045);
+    --bg-active: rgba(0,0,0,.07);
+    --fg: rgba(0,0,0,.9);
+    --fg-dim: rgba(0,0,0,.55);
+    --fg-mute: rgba(0,0,0,.35);
+    --line: rgba(0,0,0,.09);
+    --line-soft: rgba(0,0,0,.05);
+    --accent: #2f6feb;
+    --accent-fg: #ffffff;
+    --btn: rgba(0,0,0,.86);
+    --btn-fg: #ffffff;
+    --ok: #16a34a;
+    --warn: #b45309;
+    --err: #dc2626;
+    --me: #eef3fd;
+    --shadow: 0 8px 24px rgba(0,0,0,.12);
+    --mono: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1f1f1f;
+      --bg-soft: #262626;
+      --bg-hover: rgba(255,255,255,.06);
+      --bg-active: rgba(255,255,255,.1);
+      --fg: rgba(255,255,255,.9);
+      --fg-dim: rgba(255,255,255,.56);
+      --fg-mute: rgba(255,255,255,.34);
+      --line: rgba(255,255,255,.13);
+      --line-soft: rgba(255,255,255,.06);
+      --accent: #7aa7ff;
+      --accent-fg: #12203a;
+      --btn: rgba(255,255,255,.9);
+      --btn-fg: #1a1a1a;
+      --me: #243040;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .mono { font-family: var(--mono); font-size: 11px; }
+
+  .app { display: flex; flex-direction: column; height: 100%; }
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px 8px;
+    flex: none;
+  }
+  .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
+  .brand svg { width: 16px; height: 16px; opacity: .85; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-mute); }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--err); }
+  .spacer { flex: 1; }
+
+  .icon-btn {
+    width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent;
+    background: transparent; color: var(--fg-dim); font-size: 14px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
+
+  /* 「复制 Session ID」注入状态：只有开了调试端口才出现 */
+  .inject-badge {
+    appearance: none; border: 1px solid var(--line); background: transparent; color: var(--fg-mute);
+    border-radius: 999px; padding: 2px 7px; font-size: 10.5px; line-height: 1.5; white-space: nowrap;
+  }
+  .inject-badge.on { color: var(--ok); border-color: rgba(46,160,94,.45); }
+  .inject-badge:hover { background: var(--bg-hover); color: var(--fg); }
+
+  .statusbar {
+    flex: none; padding: 0 12px 8px; color: var(--fg-mute); font-size: 11px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .statusbar b { font-weight: 500; color: var(--fg-dim); }
+
+  .tabs { display: flex; gap: 2px; padding: 0 8px; flex: none; border-bottom: 1px solid var(--line-soft); overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    appearance: none; border: 0; background: transparent; padding: 7px 10px 8px;
+    color: var(--fg-dim); font-size: 12px; border-bottom: 2px solid transparent; border-radius: 0;
+    flex: none; white-space: nowrap;
+  }
+  .tab:hover { color: var(--fg); }
+  .tab.active { color: var(--fg); border-bottom-color: var(--fg); font-weight: 600; }
+  .tab .count { color: var(--fg-mute); margin-left: 4px; font-weight: 400; }
+
+  .toolbar { display: flex; gap: 6px; padding: 8px 10px; flex: none; }
+  .search {
+    flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg-soft);
+    border-radius: 6px; padding: 5px 8px; outline: none;
+  }
+  .search:focus { border-color: rgba(47,111,235,.5); background: var(--bg); }
+  .btn {
+    border: 1px solid var(--line); background: var(--bg-soft); border-radius: 6px;
+    padding: 5px 9px; font-size: 12px; white-space: nowrap;
+  }
+  .btn:hover { background: var(--bg-hover); }
+  .btn.primary { background: var(--btn); color: var(--btn-fg); border-color: transparent; }
+  .btn.primary:hover { opacity: .9; }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  .list { flex: 1; overflow: auto; padding: 0 8px 10px; }
+  .row {
+    display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: 8px;
+    cursor: pointer; position: relative;
+  }
+  .row:hover { background: var(--bg-hover); }
+  .row.active { background: var(--bg-active); }
+  .row .main { min-width: 0; flex: 1; }
+  .row .title { font-size: 12.5px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .row .sub { display: flex; align-items: center; gap: 6px; margin-top: 3px; color: var(--fg-mute); font-size: 10.5px; }
+  .row .sub .cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+  .row .id { margin-top: 3px; color: var(--fg-mute); font-family: var(--mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .ops { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity .12s; }
+  .row:hover .ops, .row.active .ops { opacity: 1; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--fg-dim); border-radius: 5px; padding: 2px 5px; font-size: 10px;
+  }
+  .chip:hover { color: var(--fg); background: var(--bg-hover); }
+  .badge { font-size: 9.5px; padding: 0 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--fg-mute); }
+  .badge.run { color: var(--ok); border-color: rgba(22,163,74,.35); }
+
+  .empty { padding: 28px 16px; text-align: center; color: var(--fg-mute); font-size: 12px; line-height: 1.7; }
+  .empty b { color: var(--fg-dim); font-weight: 500; }
+  .banner {
+    margin: 0 10px 8px; padding: 7px 9px; border-radius: 6px; font-size: 11.5px;
+    background: rgba(180,83,9,.09); color: var(--warn); border: 1px solid rgba(180,83,9,.18);
+  }
+  /* 只读来源（Codex / Claude）没有可用的写入通道，底部明说，别让人以为发了没反应 */
+  .readonly-bar {
+    flex: none; margin: 0 10px 10px; padding: 8px 10px; border-radius: 7px;
+    font-size: 11.5px; color: var(--fg-dim); background: var(--bg-soft); border: 1px solid var(--line);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .readonly-bar b { color: var(--fg); font-weight: 600; }
+  .readonly-bar .spacer { flex: 1; }
+  .linkbtn {
+    appearance: none; border: 0; background: transparent; padding: 0 0 0 6px;
+    color: var(--fg); font-size: inherit; text-decoration: underline; cursor: pointer;
+  }
+
+  /* 会话行右键菜单：和桌面端会话列表一致的操作习惯 */
+  #rowMenu {
+    position: fixed; z-index: 60; min-width: 188px; padding: 4px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: var(--shadow);
+  }
+  #rowMenu .mi {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 6px 8px; border: 0; border-radius: 5px; background: transparent;
+    color: var(--fg-dim); font-size: 12px; text-align: left; white-space: nowrap;
+  }
+  #rowMenu .mi:hover { background: var(--bg-hover); color: var(--fg); }
+  #rowMenu .mi:disabled { opacity: .38; pointer-events: none; }
+  #rowMenu .mi svg { width: 14px; height: 14px; flex: none; opacity: .6; }
+  #rowMenu .sep { height: 1px; margin: 4px 6px; background: var(--line-soft); }
+
+  /* 数据源切换：本机桌面端 / 云端 */
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; flex: none; }
+  .seg button { border: 0; background: transparent; padding: 5px 8px; font-size: 11.5px; color: var(--fg-dim); }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--bg-active); color: var(--fg); font-weight: 600; }
+
+  #detailView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .detail-head { display: flex; align-items: flex-start; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); flex: none; }
+  .detail-head .t { min-width: 0; flex: 1; }
+  .detail-head .t .name { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail-head .t .id { color: var(--fg-mute); font-family: var(--mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .messages { flex: 1; overflow: auto; padding: 10px 12px 4px; }
+  .msg { margin: 0 0 10px; }
+  .msg .who { font-size: 10px; color: var(--fg-mute); margin-bottom: 3px; display: flex; gap: 6px; align-items: center; }
+  .msg .bubble {
+    white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 1.6;
+    padding: 7px 9px; border-radius: 8px; background: var(--bg-soft); border: 1px solid var(--line-soft);
+  }
+  .msg.user .bubble { background: var(--me); border-color: transparent; }
+  .msg.user { margin-left: 14px; }
+  .msg.injected { margin-left: 0; opacity: .72; }
+  .msg.injected .bubble { background: transparent; border-style: dashed; font-size: 11px; }
+  .msg.injected .who { color: var(--fg-mute); }
+  .injected-bar { margin: 2px 0 10px; font-size: 10px; color: var(--fg-mute); display: flex; gap: 6px; align-items: center; }
+  .injected-bar button {
+    font: inherit; font-size: 10px; padding: 1px 6px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--fg-mute);
+  }
+  .injected-bar button:hover { color: var(--fg); border-color: var(--fg-mute); }
+  .msg .bubble code { font-family: var(--mono); font-size: 11px; background: rgba(127,127,127,.16); padding: 0 3px; border-radius: 3px; }
+
+  .composer { flex: none; border-top: 1px solid var(--line); padding: 8px 10px 10px; background: var(--bg); }
+  .composer textarea {
+    width: 100%; min-height: 54px; max-height: 130px; resize: vertical;
+    border: 1px solid var(--line); border-radius: 7px; background: var(--bg-soft);
+    padding: 7px 8px; outline: none; font-size: 12.5px; line-height: 1.5;
+  }
+  .composer textarea:focus { border-color: rgba(47,111,235,.5); background: var(--bg); }
+  .composer .row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .composer label { color: var(--fg-dim); font-size: 11px; display: flex; align-items: center; gap: 4px; }
+  .composer .hint { color: var(--fg-mute); font-size: 10.5px; }
+
+  #newDialog {
+    position: absolute; inset: 0; background: rgba(0,0,0,.28); display: flex;
+    align-items: center; justify-content: center; padding: 16px; z-index: 30;
+  }
+  .sheet {
+    width: 100%; max-width: 340px; background: var(--bg); border-radius: 10px; box-shadow: var(--shadow);
+    border: 1px solid var(--line); padding: 14px;
+  }
+  .sheet h3 { margin: 0 0 10px; font-size: 13px; }
+  .sheet .field { margin-bottom: 9px; }
+  .sheet label { display: block; font-size: 11px; color: var(--fg-dim); margin-bottom: 4px; }
+  .sheet input, .sheet textarea {
+    width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-soft);
+    padding: 6px 8px; outline: none; font-size: 12px;
+  }
+  .sheet textarea { min-height: 56px; resize: vertical; }
+  .sheet .row { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
+
+  #toast {
+    position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+    background: rgba(20,20,20,.92); color: #fff; font-size: 11.5px; padding: 6px 10px;
+    border-radius: 6px; opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 40;
+    max-width: 90%; text-align: center;
+  }
+  #toast.show { opacity: 1; }
+
+  .diag { flex: none; border-top: 1px solid var(--line-soft); font-size: 10.5px; color: var(--fg-mute); }
+  .diag summary { padding: 5px 10px; cursor: pointer; list-style: none; }
+  .diag summary::-webkit-details-marker { display: none; }
+  .diag .body { padding: 0 10px 8px; font-family: var(--mono); font-size: 10px; white-space: pre-wrap; max-height: 110px; overflow: auto; }
+
+  #listView { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+  [hidden] { display: none !important; }
+</style>
+<script>
+/* ------------------------------------------------------------------
+ * 宿主 Guest 通道 —— 必须在 <head> 里尽早完成握手。
+ * 宿主在 iframe load 后推 { type:"__wb_port_init__", readyToken } + MessagePort，
+ * guest 要在 10s 内用这个 port 回 wb:boundary:guest-ready，否则界面显示
+ * 「插件加载失败」（日志是 Guest Ready timed out after 10000ms）。
+ * 同时这也是之后所有 wb:* 能力与 Local RPC 的唯一通道。
+ * ------------------------------------------------------------------ */
+(function () {
+  "use strict";
+  var G = { port: null, token: "", ready: false, seq: 0, pending: {}, events: {}, via: "" };
+  window.__BRIDGE__ = G;
+
+  function send(msg) {
+    try { G.port.postMessage(msg); return true; } catch (e) { return false; }
+  }
+
+  function settle(d) {
+    var p = G.pending[d.requestId];
+    if (!p) return;
+    delete G.pending[d.requestId];
+    if (p.timer) clearTimeout(p.timer);
+    if (d.error) {
+      var err = new Error((d.error && d.error.message) || "宿主调用失败");
+      err.code = d.error && d.error.code;
+      p.reject(err);
+    } else {
+      p.resolve(d.result);
+    }
+  }
+
+  function onPortMessage(ev) {
+    var d = ev && ev.data;
+    if (!d || typeof d !== "object" || typeof d.type !== "string") return;
+    if (d.type === "wb:invoke:response") return settle(d);
+    if (d.type === "wb:event") {
+      var list = G.events[d.event] || [];
+      for (var i = 0; i < list.length; i++) { try { list[i](d.payload); } catch (e) {} }
+    }
+  }
+
+  G.on = function (name, fn) { (G.events[name] = G.events[name] || []).push(fn); };
+
+  G.invoke = function (channel, args, timeout) {
+    return new Promise(function (resolve, reject) {
+      if (!G.port) {
+        var noPort = new Error("宿主通道未建立");
+        noPort.code = "BRIDGE_NO_PORT";
+        reject(noPort);
+        return;
+      }
+      var id = "g-" + (++G.seq);
+      var timer = setTimeout(function () {
+        delete G.pending[id];
+        var err = new Error("宿主调用超时：" + channel);
+        // 单独标出来：超时可能是 service 已经被回收，而不是业务太慢
+        err.code = "BRIDGE_TIMEOUT";
+        reject(err);
+      }, timeout || 20000);
+      G.pending[id] = { resolve: resolve, reject: reject, timer: timer };
+      if (!send({ type: "wb:invoke:request", requestId: id, channel: channel, args: args || [] })) {
+        clearTimeout(timer); delete G.pending[id];
+        var err2 = new Error("无法发送宿主调用：" + channel);
+        err2.code = "BRIDGE_SEND_FAILED";
+        reject(err2);
+      }
+    });
+  };
+
+  function hello(token) {
+    var id = "ready-" + (++G.seq);
+    G.pending[id] = {
+      timer: 0,
+      resolve: function () { G.ready = true; },
+      reject: function () {},
+    };
+    if (!send({
+      type: "wb:invoke:request", requestId: id,
+      channel: "wb:boundary:guest-ready", args: [token ? { readyToken: token } : {}],
+    })) {
+      delete G.pending[id];
+    }
+  }
+
+  window.addEventListener("message", function (ev) {
+    var d = ev.data;
+    if (!d || typeof d !== "object") return;
+    if (d.type === "__wb_port_init__") {
+      if (G.port) return;
+      var port = ev.ports && ev.ports[0];
+      if (!port) return;
+      G.port = port;
+      G.token = d.readyToken || "";
+      G.via = "port";
+      port.addEventListener("message", onPortMessage);
+      try { port.start(); } catch (e) {}
+      hello(G.token);
+      return;
+    }
+    if (d.type === "wb:invoke:response") settle(d);
+  }, false);
+})();
+</script>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 5.5h8.5a2 2 0 0 1 2 2v3.8a2 2 0 0 1-2 2H9l-4 3v-3.1A2 2 0 0 1 4 11.3V7.5a2 2 0 0 1 1-2Z"/>
+        <path d="M13.8 11.6h5.2a1.8 1.8 0 0 1 1.8 1.8v2.9a1.8 1.8 0 0 1-1 1.6v2.1l-3-2.1h-3a1.8 1.8 0 0 1-1.8-1.8v-2.7a1.8 1.8 0 0 1 1.8-1.8Z"/>
+      </svg>
+      会话桥
+      <span class="dot" id="statusDot"></span>
+    </div>
+    <div class="spacer"></div>
+    <button class="inject-badge" id="injectBadge" hidden title="会话菜单注入状态">复制 ID</button>
+    <button class="icon-btn" id="btnRefresh" title="刷新">↻</button>
+  </header>
+
+  <div class="statusbar" id="statusBar">正在连接 service…</div>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="dsh">DSH 会话 <span class="count" id="countDsh"></span></button>
+    <button class="tab" data-tab="wb">WorkBuddy <span class="count" id="countWb"></span></button>
+  </nav>
+
+  <section id="listView">
+    <div class="toolbar">
+      <input class="search" id="search" placeholder="筛选标题 / 路径 / ID" />
+      <div class="seg" id="wbSource" hidden>
+        <button type="button" data-src="local" class="on">本机</button>
+        <button type="button" data-src="cloud">云端</button>
+      </div>
+      <button class="btn" id="btnNew">+ 新建</button>
+    </div>
+    <div id="bannerHost"></div>
+    <div class="list" id="list"></div>
+  </section>
+
+  <section id="detailView" hidden>
+    <div class="detail-head">
+      <button class="icon-btn" id="btnBack" title="返回">←</button>
+      <div class="t">
+        <div class="name" id="dTitle"></div>
+        <div class="id" id="dId"></div>
+      </div>
+      <button class="chip" id="btnCopyDetail">复制 ID</button>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="readonly-bar" id="readonlyBar" hidden></div>
+    <form class="composer" id="composer">
+      <textarea id="prompt" placeholder="给这个 DSH 会话发一条消息（会由 DSH agent 执行，可能改文件）"></textarea>
+      <div class="row">
+        <label><input type="checkbox" id="wait" /> 等待本轮结束</label>
+        <span class="hint" id="composerHint"></span>
+        <div class="spacer"></div>
+        <button class="btn" type="button" id="btnCancel" title="让 DSH 停下当前这一轮">停止</button>
+        <button class="btn primary" type="submit" id="btnSend">发送</button>
+      </div>
+    </form>
+  </section>
+
+  <details class="diag" id="diag">
+    <summary>诊断</summary>
+    <div class="body" id="diagBody">—</div>
+  </details>
+</div>
+
+<div id="newDialog" hidden>
+  <div class="sheet">
+    <h3 id="newDialogTitle">新建 DSH 会话</h3>
+    <div class="field">
+      <label>工作目录</label>
+      <input id="newCwd" spellcheck="false" />
+    </div>
+    <div class="field">
+      <label>第一条任务（可留空）</label>
+      <textarea id="newPrompt" placeholder="例如：把当前目录的 README 补一节用法说明"></textarea>
+    </div>
+    <div class="row">
+      <button class="btn" type="button" id="btnNewCancel">取消</button>
+      <button class="btn primary" type="button" id="btnNewCreate">创建</button>
+    </div>
+  </div>
+</div>
+
+<div id="rowMenu" hidden role="menu"></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+var EXT = "dsh-session-bridge";
+var state = {
+  tab: "dsh",
+  online: false,
+  dsh: [],
+  wb: [],
+  wbSource: "local",
+  /* 其他本地 harness（Codex / Claude）：只有读的能力，标签页按实际检测结果生成 */
+  harnesses: {},
+  harnessRows: [],
+  harnessHidden: 0,
+  harnessLabel: "",
+  includeSub: false,
+  filter: "",
+  current: null,
+  messages: [],
+  showInjected: false,
+  pollTimer: null,
+  grant: null,
+  style: null,
+  diag: [],
+  ready: false,
+  serviceOk: false,
+};
+
+try { state.style = localStorage.getItem("dsb.style") || null; } catch (e) {}
+
+function $(id) { return document.getElementById(id); }
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+}
+function log(line) {
+  state.diag.push(new Date().toISOString().slice(11, 19) + " " + line);
+  if (state.diag.length > 60) state.diag.shift();
+  var body = $("diagBody");
+  if (body) body.textContent = state.diag.join("\n");
+}
+function toast(text, ms) {
+  var node = $("toast");
+  node.textContent = text;
+  node.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(function () { node.classList.remove("show"); }, ms || 1800);
+}
+function fmtTime(ms) {
+  if (!ms) return "";
+  var d = new Date(Number(ms));
+  if (isNaN(d.getTime())) return "";
+  var p = function (n) { return String(n).padStart(2, "0"); };
+  return p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+function shortId(id) {
+  if (!id) return "";
+  return id.length > 30 ? id.slice(0, 13) + "…" + id.slice(-8) : id;
+}
+function shortCwd(cwd) {
+  if (!cwd) return "";
+  var parts = String(cwd).split(/[\\/]/).filter(Boolean);
+  return parts.length <= 2 ? cwd : "…/" + parts.slice(-2).join("/");
+}
+
+/* ---------------- 两跳 Local RPC ---------------- */
+
+function viaPort(channel, args, timeout) {
+  return window.__BRIDGE__.invoke(channel, args, timeout);
+}
+function viaIpc(channel, args) {
+  var fn = window.__wbInvoke;
+  if (typeof fn !== "function") return Promise.reject(new Error("__wbInvoke 不可用"));
+  try {
+    return Promise.resolve(fn.apply(null, [channel, null].concat(args || [])));
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+function resolveGrant() {
+  var args = [EXT, "ping"];
+  function one(fn) {
+    return fn("wb:extensions:$resolveLocalRpc", args, 20000).then(function (g) {
+      if (!g || !g.fallbackToken) {
+        var e = new Error("宿主没给票据（扩展可能没声明 service，或 service fork 失败）");
+        e.code = "NO_GRANT";
+        throw e;
+      }
+      state.grant = {
+        token: g.fallbackToken,
+        exp: Number(g.fallbackExpiresAt) || (Date.now() + 300000),
+        methods: g.methods || [],
+      };
+      return state.grant;
+    });
+  }
+  if (state.style === "port") return one(viaPort);
+  if (state.style === "ipc") return one(viaIpc);
+  return new Promise(function (resolve, reject) {
+    var left = 2, errs = [];
+    function ok(how, value) {
+      if (state.grant && state.grant.token && !state.style) {
+        state.style = how;
+        try { localStorage.setItem("dsb.style", how); } catch (e) {}
+        log("通道：" + how);
+      }
+      resolve(value);
+    }
+    function bad(how, e) {
+      errs.push(how + ": " + e.message);
+      if (--left === 0) reject(new Error(errs.join(" | ")));
+    }
+    one(viaPort).then(function (v) { ok("port", v); }, function (e) { bad("port", e); });
+    one(viaIpc).then(function (v) { ok("ipc", v); }, function (e) { bad("ipc", e); });
+  });
+}
+
+function invokeOnce(method, payload, timeout) {
+  var args = [EXT, method, payload || {}, state.grant.token];
+  if (state.style === "ipc") return viaIpc("wb:extensions:$invokeLocalRpcFallback", args);
+  return viaPort("wb:extensions:$invokeLocalRpcFallback", args, timeout || 60000);
+}
+
+/* service 被宿主回收后 port 会变成黑洞：调用一直等到超时。
+ * 这种情况要重取票据（宿主会顺手重新 fork 一个 service）。
+ * 但只对只读方法这么做，避免把「发消息」这类有副作用的请求投两次。 */
+var RETRY_SAFE = /^(ping|status|listDsh|listWb|messagesDsh|requestsWb)$/;
+
+function isTransportError(e) {
+  var code = e && e.code;
+  if (code === "BRIDGE_TIMEOUT" || code === "BRIDGE_NO_PORT" || code === "BRIDGE_SEND_FAILED" || code === "NO_GRANT") return true;
+  return /宿主通道未建立|无法发送宿主调用/i.test(String((e && e.message) || e));
+}
+
+function svc(method, payload, timeout) {
+  var fresh = state.grant && state.grant.exp > Date.now() + 5000;
+  var p = fresh
+    ? invokeOnce(method, payload, timeout)
+    : resolveGrant().then(function () { return invokeOnce(method, payload, timeout); });
+  return p.catch(function (e) {
+    var msg = String((e && e.message) || e);
+    var transport = isTransportError(e);
+    if (transport && !RETRY_SAFE.test(method)) throw e;
+    if (!transport && !/PERMISSION|STALE|EXPIRED|denied|invalid|过期|票据/i.test(msg)) throw e;
+    log("重取票据后重试 " + method + "（" + (e.code || msg) + "）");
+    state.grant = null;
+    return resolveGrant().then(function () { return invokeOnce(method, payload, timeout); });
+  });
+}
+
+/* ---------------- 启动 ---------------- */
+
+function boot() {
+  if (!window.__BRIDGE__.port) {
+    $("statusBar").textContent = "未连接到 WorkBuddy 宿主（请从侧栏打开）";
+    $("statusDot").className = "dot off";
+    return;
+  }
+  if (state.ready) {
+    resolveGrant().then(function () { return refreshStatus(); }).catch(showFatal);
+    return;
+  }
+  state.ready = true;
+  setTimeout(function () {
+    svc("ping", {}, 15000)
+      .then(function (info) {
+        state.serviceOk = true;
+        log("service v" + info.version + " · " + info.endpoint);
+        $("newCwd").value = info.defaultCwd || "";
+        return refreshStatus();
+      })
+      .catch(showFatal);
+  }, 60);
+}
+
+function showFatal(e) {
+  state.serviceOk = false;
+  $("statusDot").className = "dot off";
+  $("statusBar").textContent = "service 不可用";
+  var host = $("bannerHost");
+  host.innerHTML = "";
+  var box = el("div", "banner");
+  box.textContent = "service 没起来：" + e.message + "。改完扩展后需要托盘退出 WorkBuddy 再启动。";
+  host.appendChild(box);
+  log("fatal: " + e.message);
+}
+
+function refreshStatus() {
+  return svc("status", {}, 20000).then(function (info) {
+    state.online = info.online;
+    $("statusDot").className = "dot " + (info.online ? "on" : "off");
+    $("statusBar").innerHTML = "";
+    appendStatus(info);
+    log("status online=" + info.online + " tools=" + (info.tools || []).length + (info.error ? " err=" + info.error : ""));
+    refreshInject();
+    return loadHarnesses().then(function () { return loadList(); });
+  });
+}
+
+/**
+ * 「复制 Session ID」注入状态。
+ * 没设 WORKBUDDY_REMOTE_DEBUGGING_PORT 时 enabled=false，徽标整个不显示——
+ * 没开启的东西不该占位置。
+ */
+function refreshInject() {
+  return svc("menuInject", {}, 8000)
+    .then(function (info) {
+      var badge = $("injectBadge");
+      if (!badge) return;
+      if (!info || !info.enabled) {
+        badge.hidden = true;
+        return;
+      }
+      var live = (info.connected || 0) > 0;
+      badge.hidden = false;
+      badge.className = "inject-badge" + (live ? " on" : "");
+      badge.textContent = live ? "右键菜单 ✓" : "右键菜单 …";
+      badge.title = live
+        ? "已注入「复制 Session ID」：会话的更多菜单里多一项（CDP " + info.port + "，已连 " + info.connected + " 个窗口）"
+        : "调试端口 " + info.port + " 已开，还没连上主窗口" + (info.lastError ? "：" + info.lastError : "，稍候自动重试");
+    })
+    .catch(function (e) {
+      log("menuInject error " + e.message);
+    });
+}
+
+/**
+ * 问 service 这台机器上还有哪些本地 harness（Codex / Claude），据此生成标签页。
+ * 没装的不占位——列表里出现一个永远空的标签比没有更让人困惑。
+ */
+function loadHarnesses() {
+  return svc("harnesses", {}, 25000)
+    .then(function (res) {
+      state.harnesses = {};
+      (res.harnesses || []).forEach(function (item) { state.harnesses[item.id] = item; });
+      buildHarnessTabs(res.harnesses || []);
+    })
+    .catch(function (e) {
+      log("harnesses error " + e.message);
+      buildHarnessTabs([]);
+    });
+}
+
+function buildHarnessTabs(list) {
+  var nav = document.querySelector(".tabs");
+  if (!nav) return;
+  Array.prototype.slice.call(nav.querySelectorAll('.tab[data-dynamic]')).forEach(function (node) {
+    node.parentNode.removeChild(node);
+  });
+  list.forEach(function (item) {
+    if (!item.available) return;
+    var btn = el("button", "tab");
+    btn.dataset.tab = "harness:" + item.id;
+    btn.dataset.dynamic = "1";
+    btn.appendChild(document.createTextNode(item.label));
+    var count = el("span", "count");
+    count.id = "count-" + item.id;
+    btn.appendChild(count);
+    btn.addEventListener("click", onTabClick);
+    nav.appendChild(btn);
+  });
+  /* 重建会丢掉激活态，按 state.tab 复原（点 ↻ 时正在看 Codex 就不会跳回 DSH） */
+  document.querySelectorAll(".tab").forEach(function (node) {
+    node.classList.toggle("active", node.dataset.tab === state.tab);
+  });
+}
+
+function appendStatus(info) {
+  var bar = $("statusBar");
+  var text = info.online
+    ? "DSH 在线 · " + (info.tools || []).length + " 个工具"
+    : (info.tokenFound ? "DSH 离线（历史模式）" : "未找到 DSH token");
+  bar.appendChild(document.createTextNode(text));
+  if (!info.online && info.error) {
+    bar.appendChild(document.createTextNode(" · "));
+    var b = el("b", null, "原因");
+    b.title = info.error;
+    bar.appendChild(b);
+  }
+}
+
+/* ---------------- 行操作菜单 ---------------- */
+
+/* 图标是固定字符串，不含用户数据，可以安全 innerHTML */
+var ICON = {
+  eye: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="1.8"/></svg>',
+  ext: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M9.5 2.5h4v4"/><path d="M13.5 2.5 7.5 8.5"/><path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/></svg>',
+  copy: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.5" y="2.5" width="8" height="9" rx="1.5"/><path d="M10.5 13.5H4A1.5 1.5 0 0 1 2.5 12V6"/></svg>',
+  text: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 4.5h10M3 8h10M3 11.5h6"/></svg>',
+  folder: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3L8 6h4.5A1.5 1.5 0 0 1 14 7.5V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/></svg>',
+  term: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 7l1.8 1.6L5 10.2M8.5 10.5h3"/></svg>',
+};
+
+function menuItem(label, icon, onClick, disabled) {
+  var btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "mi";
+  btn.innerHTML = icon;
+  btn.appendChild(document.createTextNode(label));
+  if (disabled) btn.disabled = true;
+  btn.addEventListener("click", function () {
+    closeMenu();
+    if (!disabled) onClick();
+  });
+  return btn;
+}
+
+function closeMenu() {
+  var menu = $("rowMenu");
+  if (!menu) return;
+  menu.hidden = true;
+  menu.innerHTML = "";
+}
+
+/** 右键 / ⋯ 都走这里；位置按视口夹紧，贴着右下角也不会跑出去 */
+function openRowMenu(row, x, y) {
+  var menu = $("rowMenu");
+  var isWb = state.tab === "wb";
+  var hid = harnessIdOf(state.tab);
+  var harnessMeta = hid ? state.harnesses[hid] || {} : null;
+  var cwd = row.cwd || "";
+  menu.innerHTML = "";
+
+  menu.appendChild(menuItem("在详情中查看", ICON.eye, function () { openDetail(row); }));
+  if (isWb) {
+    menu.appendChild(menuItem("在 WorkBuddy 中打开", ICON.ext, function () {
+      location.href = "workbuddy://chat/" + encodeURIComponent(row.id);
+    }));
+  }
+  menu.appendChild(el("div", "sep"));
+  menu.appendChild(menuItem("复制会话 ID", ICON.copy, function () { copyValue(row.id, "会话 ID"); }, !row.id));
+  menu.appendChild(menuItem("复制会话标题", ICON.text, function () { copyValue(row.title, "标题"); }, !row.title));
+  menu.appendChild(menuItem("复制工作目录", ICON.folder, function () { copyValue(cwd, "工作目录"); }, !cwd));
+  if (harnessMeta && harnessMeta.resumePrefix) {
+    var resume = harnessMeta.resumePrefix + " " + row.id;
+    menu.appendChild(menuItem("复制恢复命令", ICON.term, function () { copyValue(resume, "恢复命令"); }));
+  }
+  menu.appendChild(el("div", "sep"));
+  menu.appendChild(
+    menuItem("在资源管理器中显示", ICON.folder, function () { revealPath(cwd || row.file); }, !cwd && !row.file)
+  );
+
+  menu.hidden = false;
+  var w = menu.offsetWidth;
+  var h = menu.offsetHeight;
+  menu.style.left = Math.min(Math.max(6, x), Math.max(6, window.innerWidth - w - 6)) + "px";
+  menu.style.top = Math.min(Math.max(6, y), Math.max(6, window.innerHeight - h - 6)) + "px";
+}
+
+function copyValue(text, label) {
+  var value = String(text || "");
+  if (!value) { toast("没有可复制的" + (label || "内容")); return Promise.resolve(); }
+  return svc("copyText", { text: value }, 10000)
+    .then(function (res) {
+      toast(res.ok ? "已复制" + label + "：" + shortId(value) : "复制失败（剪贴板不可用）", 2400);
+    })
+    .catch(function (e) {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(value).then(function () { toast("已复制" + label + "：" + shortId(value)); });
+      } else {
+        toast("复制失败：" + e.message, 3000);
+      }
+    });
+}
+
+function revealPath(target) {
+  if (!target) return;
+  svc("revealPath", { path: target }, 12000)
+    .then(function () { closeMenu(); })
+    .catch(function (e) { toast("打不开：" + e.message, 3200); });
+}
+
+document.addEventListener("mousedown", function (e) {
+  var menu = $("rowMenu");
+  if (menu && !menu.hidden && !menu.contains(e.target)) closeMenu();
+}, true);
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") closeMenu();
+});
+window.addEventListener("resize", closeMenu);
+window.addEventListener("blur", closeMenu);
+
+/* ---------------- 列表 ---------------- */
+
+function loadList() {
+  if (state.tab === "dsh") return loadDsh();
+  if (state.tab === "wb") return loadWb();
+  return loadHarness();
+}
+
+/** 标签页 key：dsh / wb / harness:<id> */
+function harnessIdOf(tab) {
+  return String(tab || "").indexOf("harness:") === 0 ? tab.slice(8) : "";
+}
+
+function loadHarness() {
+  var id = harnessIdOf(state.tab);
+  var meta = state.harnesses[id] || {};
+  state.harnessLabel = meta.label || id;
+  $("list").innerHTML = "";
+  $("list").appendChild(el("div", "empty", "加载 " + state.harnessLabel + " 本地会话…"));
+  return svc(
+    "listHarness",
+    { harness: id, limit: 80, includeSubagents: state.includeSub },
+    30000
+  )
+    .then(function (res) {
+      state.harnessRows = res.rows || [];
+      state.harnessHidden = res.hidden || 0;
+      var badge = $("count-" + id);
+      if (badge) badge.textContent = String(state.harnessRows.length);
+      $("bannerHost").innerHTML = "";
+      if (res.hidden > 0 || state.includeSub) {
+        /* 展开后 service 的 hidden 是 0（没有东西被隐藏了），得自己数行里的子 agent，
+           否则会显示「已显示 0 条子 agent 线程」 */
+        var subCount = res.hidden > 0
+          ? res.hidden
+          : state.harnessRows.filter(function (row) { return row.subagent; }).length;
+        var box = el("div", "banner");
+        box.appendChild(
+          document.createTextNode(
+            state.includeSub
+              ? "已显示 " + subCount + " 条子 agent 线程"
+              : "已折叠 " + res.hidden + " 条子 agent 线程（子 agent 没有独立对话，展开会盖住主线）"
+          )
+        );
+        var toggle = document.createElement("button");
+        toggle.className = "linkbtn";
+        toggle.textContent = state.includeSub ? "折叠" : "展开";
+        toggle.addEventListener("click", function () {
+          state.includeSub = !state.includeSub;
+          loadHarness();
+        });
+        box.appendChild(toggle);
+        $("bannerHost").appendChild(box);
+      }
+      render();
+      log("listHarness " + id + " " + state.harnessRows.length + " hidden=" + res.hidden);
+    })
+    .catch(function (e) {
+      $("list").innerHTML = "";
+      var box = el("div", "empty");
+      box.appendChild(el("b", null, "读取 " + state.harnessLabel + " 会话失败"));
+      box.appendChild(document.createElement("br"));
+      box.appendChild(document.createTextNode(e.message));
+      $("list").appendChild(box);
+      log("listHarness error " + e.message);
+    });
+}
+
+function loadDsh() {
+  $("list").innerHTML = "";
+  $("list").appendChild(el("div", "empty", "加载 DSH 会话…"));
+  return svc("listDsh", { limit: 60 }, 30000)
+    .then(function (res) {
+      state.dsh = res.sessions || [];
+      $("countDsh").textContent = String(state.dsh.length);
+      $("bannerHost").innerHTML = "";
+      if (res.warning) {
+        var box = el("div", "banner", "MCP 暂时不可用，已退回磁盘历史：可以看 ID / 复制，但不能发消息。");
+        box.title = res.warning;
+        $("bannerHost").appendChild(box);
+      }
+      render();
+      log("listDsh " + res.source + " " + state.dsh.length);
+    })
+    .catch(function (e) {
+      $("list").innerHTML = "";
+      $("list").appendChild(el("div", "empty", "读取失败：" + e.message));
+      log("listDsh error " + e.message);
+    });
+}
+
+function loadWb() {
+  var source = state.wbSource;
+  $("list").innerHTML = "";
+  $("list").appendChild(el("div", "empty", "加载 WorkBuddy 会话…"));
+  return svc("listWb", { source: source, page: 1, pageSize: 40 }, 25000)
+    .then(function (res) {
+      state.wb = res.conversations || [];
+      $("countWb").textContent = String(state.wb.length);
+      $("bannerHost").innerHTML = "";
+      if (res.cloudError) {
+        var box = el("div", "banner", "云端会话取不到：" + res.cloudError + "（本机记录不受影响）");
+        $("bannerHost").appendChild(box);
+      }
+      render();
+      log("listWb " + source + " " + state.wb.length + (res.cloudError ? " cloudError" : ""));
+    })
+    .catch(function (e) {
+      $("list").innerHTML = "";
+      var box = el("div", "empty");
+      box.appendChild(el("b", null, "读取 WorkBuddy 会话失败"));
+      box.appendChild(document.createElement("br"));
+      box.appendChild(document.createTextNode(e.message));
+      $("list").appendChild(box);
+      log("listWb error " + e.message);
+    });
+}
+
+function currentRows() {
+  var rows =
+    state.tab === "dsh" ? state.dsh : state.tab === "wb" ? state.wb : state.harnessRows;
+  var q = state.filter.trim().toLowerCase();
+  if (!q) return rows;
+  return rows.filter(function (row) {
+    return [row.title, row.cwd, row.id, row.agent].join(" ").toLowerCase().indexOf(q) >= 0;
+  });
+}
+
+function render() {
+  var list = $("list");
+  list.innerHTML = "";
+  var rows = currentRows();
+  if (!rows.length) {
+    var empty = el("div", "empty");
+    if (state.tab === "dsh") {
+      empty.appendChild(el("b", null, state.filter ? "没有匹配的会话" : "还没有 DSH 会话"));
+      empty.appendChild(document.createElement("br"));
+      empty.appendChild(document.createTextNode(state.filter ? "换个关键词试试" : "点右上角「新建」开一个，或在 DSH 里先跑一轮"));
+    } else if (state.tab !== "wb") {
+      empty.appendChild(el("b", null, state.filter ? "没有匹配的会话" : "这个 harness 里没有会话"));
+      empty.appendChild(document.createElement("br"));
+      empty.appendChild(
+        document.createTextNode(
+          state.filter ? "换个关键词试试" : "在 " + (state.harnessLabel || "它") + " 里聊过之后，本地记录会自动出现在这里"
+        )
+      );
+    } else {
+      empty.appendChild(
+        el("b", null, state.filter ? "没有匹配的会话" : state.wbSource === "cloud" ? "云端没有会话" : "本机还没有桌面端会话")
+      );
+      empty.appendChild(document.createElement("br"));
+      empty.appendChild(
+        document.createTextNode(
+          state.filter
+            ? "换个关键词试试"
+            : state.wbSource === "cloud"
+              ? "云端列表来自登录账号，换「本机」看这台机器上的会话"
+              : "在这里聊过的会话会落在 ~/.workbuddy/projects，刷新一下即可"
+        )
+      );
+    }
+    list.appendChild(empty);
+    return;
+  }
+
+  rows.forEach(function (row) {
+    var node = el("div", "row");
+    if (state.current && state.kind === state.tab && state.current.id === row.id) node.classList.add("active");
+
+    var main = el("div", "main");
+    main.appendChild(el("div", "title", row.title || "(未命名)"));
+    var sub = el("div", "sub");
+    if (row.cwd) sub.appendChild(el("span", "cwd", shortCwd(row.cwd)));
+    if (row.updatedAt) sub.appendChild(el("span", null, fmtTime(row.updatedAt)));
+    if (row.running) sub.appendChild(el("span", "badge run", "运行中"));
+    if (row.subagent) sub.appendChild(el("span", "badge", "子 agent" + (row.agent ? " · " + row.agent : "")));
+    main.appendChild(sub);
+    main.appendChild(el("div", "id", row.id));
+    main.addEventListener("click", function () { openDetail(row); });
+    node.addEventListener("contextmenu", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openRowMenu(row, e.clientX, e.clientY);
+    });
+
+    var ops = el("div", "ops");
+    var more = el("button", "chip", "⋯");
+    more.title = "更多操作（也可以右键这一行）";
+    more.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var rect = more.getBoundingClientRect();
+      openRowMenu(row, rect.right - 190, rect.bottom + 4);
+    });
+    ops.appendChild(more);
+
+    node.appendChild(main);
+    node.appendChild(ops);
+    list.appendChild(node);
+  });
+}
+
+function copyId(id) {
+  return copyValue(id, "会话 ID");
+}
+
+/* ---------------- 详情 / 对话 ---------------- */
+
+function openDetail(row) {
+  state.current = row;
+  state.kind = state.tab === "wb" ? "wb" : state.tab === "dsh" ? "dsh" : "harness";
+  state.rowSource = row.source || (state.kind === "wb" ? "local" : state.kind);
+  state.msgFrom = "";
+  var isWb = state.kind === "wb";
+  var isReadOnly = state.kind === "harness";
+  if (isReadOnly) {
+    var meta = state.harnesses[harnessIdOf(state.tab)] || {};
+    state.harnessLabel = meta.label || state.harnessLabel || "Agent";
+  }
+  $("listView").hidden = true;
+  $("detailView").hidden = false;
+  $("dTitle").textContent = row.title || "(未命名)";
+  $("dId").textContent = row.id;
+  $("messages").innerHTML = "";
+  $("prompt").value = "";
+  $("composerHint").textContent = "";
+  $("prompt").placeholder = isWb
+    ? "给这个 WorkBuddy 会话发一条消息（由那个会话的 agent 执行）"
+    : "给这个 DSH 会话发一条消息（会由 DSH agent 执行，可能改文件）";
+  $("btnCancel").hidden = isWb;
+  $("wait").parentNode.hidden = isWb;
+  $("btnCopyDetail").textContent = "复制 ID";
+  /* Codex / Claude 的写入通道是私有 IPC，硬塞会打乱它们自己的会话状态——
+     这两个来源只读，底部说清楚，别让人以为发了没反应。 */
+  $("composer").hidden = isReadOnly;
+  renderReadonlyBar(row, isReadOnly);
+  render();
+  loadMessages(true);
+  if (!isReadOnly) startPolling(); // 只读来源是静态文件，轮询只会白发请求
+}
+
+function renderReadonlyBar(row, visible) {
+  var bar = $("readonlyBar");
+  bar.innerHTML = "";
+  bar.hidden = !visible;
+  if (!visible) return;
+  var id = harnessIdOf(state.tab);
+  var meta = state.harnesses[id] || {};
+  bar.appendChild(el("b", null, (meta.label || state.harnessLabel || "该 harness") + " 本地记录"));
+  bar.appendChild(el("span", null, "只读 · 继续对话请在它自己的应用里打开"));
+  var spacer = el("span", "spacer");
+  bar.appendChild(spacer);
+  var hint = (meta.resumePrefix || "") + " " + row.id;
+  var btn = el("button", "chip", "复制恢复命令");
+  btn.title = hint;
+  btn.addEventListener("click", function () { copyValue(hint, "恢复命令"); });
+  bar.appendChild(btn);
+}
+
+function closeDetail() {
+  state.current = null;
+  stopPolling();
+  $("detailView").hidden = true;
+  $("listView").hidden = false;
+  render();
+}
+
+function loadMessages(scroll) {
+  if (!state.current) return Promise.resolve();
+  var id = state.current.id;
+  var isWb = state.kind === "wb";
+  var request;
+  if (state.kind === "harness") {
+    /* 只读来源直接整份解析：它们没有宿主运行时，也没有增量接口 */
+    request = svc("readHarness", { harness: harnessIdOf(state.tab), id: id, limit: 240 }, 40000).then(
+      function (res) { return { messages: res.messages || [], from: res.found ? "disk" : "none", label: res.label }; }
+    );
+  } else if (isWb) {
+    request = svc("requestsWb", { conversationId: id, limit: 60 }, 25000).then(function (res) {
+      if (res.shape) log("requestsWb shape " + res.shape);
+      var list = res.messages || [];
+      if (list.length) return { messages: list, from: "host" };
+      /* 宿主只在会话被载入运行时之后才有消息，客户端重启后旧会话就是空的。
+         这时退回磁盘记录，桌面端的历史照常看得到。 */
+      return svc("readWbLocal", { conversationId: id, limit: 120 }, 20000).then(
+        function (local) {
+          if (local && local.found) return { messages: local.messages || [], from: "disk" };
+          return { messages: [], from: "none" };
+        },
+        function () { return { messages: [], from: "none" }; }
+      );
+    });
+  } else {
+    request = svc("messagesDsh", { sessionId: id, limit: 60 }, 25000);
+  }
+  return request
+    .then(function (res) {
+      state.messages = res.messages || [];
+      state.msgFrom = res.from || "host";
+      renderMessages(scroll);
+    })
+    .catch(function (e) {
+      state.messages = [];
+      var box = $("messages");
+      box.innerHTML = "";
+      box.appendChild(el("div", "empty", "读消息失败：" + e.message));
+      log("messages error " + e.message);
+    });
+}
+
+function renderMessages(scroll) {
+  var box = $("messages");
+  var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.innerHTML = "";
+  if (!state.messages.length) {
+    var empty = el("div", "empty");
+    if (state.kind === "harness" && state.msgFrom === "none") {
+      empty.appendChild(el("b", null, "这条会话没有可读的消息"));
+      empty.appendChild(document.createElement("br"));
+      empty.appendChild(document.createTextNode("本地记录里没有内容，可能已被清理，或记录文件还没落盘。"));
+    } else if (state.kind === "wb" && state.msgFrom === "none") {
+      empty.appendChild(el("b", null, "读不到这条会话的消息"));
+      empty.appendChild(document.createElement("br"));
+      empty.appendChild(
+        document.createTextNode(
+          state.rowSource === "cloud"
+            ? "云端会话只支持复制 ID、在 WorkBuddy 中打开。"
+            : "本机记录里也没有它，可能已被清理。"
+        )
+      );
+    } else {
+      empty.appendChild(document.createTextNode("还没有消息。下面发一条试试。"));
+    }
+    box.appendChild(empty);
+    return;
+  }
+  if (state.msgFrom === "disk") {
+    box.appendChild(
+      el(
+        "div",
+        "injected-bar",
+        state.kind === "harness"
+          ? "内容来自本机记录 · " + (state.harnessLabel || "该 harness") + " 没有向本进程开放会话接口"
+          : "内容来自本机记录 · 这条会话没载入宿主运行时"
+      )
+    );
+  }
+  var visible = state.messages.filter(function (message) {
+    return !message.injected || state.showInjected;
+  });
+  var hidden = state.messages.length - visible.length;
+
+  if (!visible.length) {
+    box.appendChild(el("div", "empty", "这一屏只有 DSH 的系统注入，没有真人对话。"));
+  }
+  visible.forEach(function (message) {
+    var wrap = el("div", "msg " + message.role + (message.injected ? " injected" : ""));
+    var who = el(
+      "div",
+      "who",
+      message.injected
+        ? "系统注入"
+        : message.role === "user"
+          ? "用户"
+          : state.kind === "wb"
+            ? "WorkBuddy"
+            : state.kind === "harness"
+              ? state.harnessLabel || "Agent"
+              : "DSH"
+    );
+    if (message.time) who.appendChild(el("span", null, fmtTime(message.time)));
+    wrap.appendChild(who);
+    var bubble = el("div", "bubble");
+    appendRich(bubble, message.text || "");
+    wrap.appendChild(bubble);
+    box.appendChild(wrap);
+  });
+
+  if (hidden > 0 || (state.showInjected && state.messages.some(function (m) { return m.injected; }))) {
+    var bar = el("div", "injected-bar");
+    bar.appendChild(
+      el("span", null, state.showInjected ? "已展开 DSH 注入给模型的上下文" : "已隐藏 " + hidden + " 条系统注入")
+    );
+    var toggle = document.createElement("button");
+    toggle.textContent = state.showInjected ? "收起" : "看看";
+    toggle.addEventListener("click", function () {
+      state.showInjected = !state.showInjected;
+      renderMessages(false);
+    });
+    bar.appendChild(toggle);
+    box.appendChild(bar);
+  }
+  if (scroll || atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function appendRich(parent, text) {
+  // 只处理行内 code 和 **加粗**，其余按纯文本；先转义再替换，避免注入。
+  var escaped = String(text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  var parts = escaped.split(/(`[^`\n]{1,120}`|\*\*[^*\n]{1,160}\*\*)/g);
+  parts.forEach(function (part) {
+    if (!part) return;
+    if (part.charAt(0) === "`" && part.charAt(part.length - 1) === "`") {
+      parent.appendChild(el("code", null, part.slice(1, -1)));
+    } else if (part.slice(0, 2) === "**" && part.slice(-2) === "**") {
+      var strong = document.createElement("strong");
+      strong.textContent = part.slice(2, -2);
+      parent.appendChild(strong);
+    } else {
+      parent.appendChild(document.createTextNode(part));
+    }
+  });
+}
+
+function startPolling() {
+  stopPolling();
+  state.pollTimer = setInterval(function () {
+    if (!state.current) return;
+    if (state.msgFrom === "disk") return; // 历史会话不必每 3 秒重读一遍文件
+    loadMessages(false);
+  }, 3000);
+}
+function stopPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = null;
+}
+
+function sendPrompt(e) {
+  e.preventDefault();
+  if (!state.current) return;
+  var text = $("prompt").value.trim();
+  if (!text) return;
+  var isWb = state.kind === "wb";
+
+  if (isWb) {
+    $("btnSend").disabled = true;
+    $("composerHint").textContent = "已发送，等对方回话…";
+    svc("promptWb", { conversationId: state.current.id, text: text }, 30000)
+      .then(function () {
+        $("prompt").value = "";
+        $("composerHint").textContent = "已发送";
+        setTimeout(function () { $("composerHint").textContent = ""; }, 2500);
+        loadMessages(true);
+      })
+      .catch(function (err) {
+        $("composerHint").textContent = "";
+        toast("发送失败：" + err.message, 3600);
+        log("promptWb error " + err.message);
+      })
+      .finally(function () { $("btnSend").disabled = false; });
+    return;
+  }
+
+  var wait = $("wait").checked;
+  $("btnSend").disabled = true;
+  $("composerHint").textContent = wait ? "等待 DSH 跑完…" : "已排队";
+  svc("promptDsh", {
+    sessionId: state.current.id,
+    prompt: text,
+    wait: wait,
+    mode: "queue",
+    timeoutMs: wait ? 90000 : 20000,
+  }, wait ? 100000 : 30000)
+    .then(function (res) {
+      $("prompt").value = "";
+      $("composerHint").textContent = res.timedOut ? "已排队（等待超时，继续轮询）" : "已发送";
+      if (res.reply) {
+        state.messages.push({ role: "assistant", text: res.reply, time: Date.now() });
+        renderMessages(true);
+      }
+      setTimeout(function () { $("composerHint").textContent = ""; }, 2500);
+      loadMessages(true);
+    })
+    .catch(function (err) {
+      $("composerHint").textContent = "";
+      toast("发送失败：" + err.message, 3200);
+      log("prompt error " + err.message);
+    })
+    .finally(function () { $("btnSend").disabled = false; });
+}
+
+function cancelTurn() {
+  if (!state.current) return;
+  svc("cancelDsh", { sessionId: state.current.id }, 20000)
+    .then(function () { toast("已请求停止"); })
+    .catch(function (e) { toast("停止失败：" + e.message); });
+}
+
+/* ---------------- 新建 ---------------- */
+
+function openNew() {
+  var isWb = state.tab === "wb";
+  if (!isWb && !state.online) {
+    toast("DSH 离线，先启动 DeepSeek Harness");
+    return;
+  }
+  $("newDialogTitle").textContent = isWb ? "新建 WorkBuddy 会话" : "新建 DSH 会话";
+  $("newDialog").hidden = false;
+  setTimeout(function () { $("newCwd").focus(); }, 30);
+}
+function closeNew() { $("newDialog").hidden = true; }
+
+function createSession() {
+  var cwd = $("newCwd").value.trim();
+  var prompt = $("newPrompt").value.trim();
+  if (state.tab === "wb") return createWorkbuddySession(cwd, prompt);
+  if (!cwd) { toast("填一个工作目录"); return; }
+  $("btnNewCreate").disabled = true;
+  svc("createDsh", { cwd: cwd, prompt: prompt }, 45000)
+    .then(function (res) {
+      closeNew();
+      $("newPrompt").value = "";
+      toast("已创建：" + shortId(res.sessionId));
+      return loadDsh().then(function () {
+        var row = state.dsh.filter(function (item) { return item.id === res.sessionId; })[0] || {
+          id: res.sessionId, title: prompt ? prompt.slice(0, 40) : "新会话", cwd: cwd, running: Boolean(prompt),
+        };
+        openDetail(row);
+      });
+    })
+    .catch(function (e) { toast("创建失败：" + e.message, 3200); })
+    .finally(function () { $("btnNewCreate").disabled = false; });
+}
+
+/** WorkBuddy 侧：建会话 → 立刻投第一条，然后进详情等回话。 */
+function createWorkbuddySession(cwd, prompt) {
+  $("btnNewCreate").disabled = true;
+  $("newPrompt").value = "";
+  svc("createWb", cwd ? { cwd: cwd } : {}, 45000)
+    .then(function (res) {
+      return svc("promptWb", { conversationId: res.conversationId, text: prompt }, 30000).then(function () {
+        return res;
+      });
+    })
+    .then(function (res) {
+      closeNew();
+      toast("已创建：" + shortId(res.conversationId));
+      // 新建出来的是本机会话，别让它落在云端那一栏里找不到
+      if (state.wbSource !== "local") {
+        state.wbSource = "local";
+        document.querySelectorAll("#wbSource button").forEach(function (node) {
+          node.classList.toggle("on", node.dataset.src === "local");
+        });
+      }
+      return loadWb().then(function () {
+        var row = state.wb.filter(function (item) { return item.id === res.conversationId; })[0] || {
+          id: res.conversationId, title: res.title || (prompt ? prompt.slice(0, 40) : "新会话"), cwd: cwd,
+        };
+        openDetail(row);
+      });
+    })
+    .catch(function (e) {
+      toast("创建失败：" + e.message, 4200);
+      log("createWb error " + e.message);
+    })
+    .finally(function () { $("btnNewCreate").disabled = false; });
+}
+
+/* ---------------- 事件绑定 ---------------- */
+
+$("btnRefresh").addEventListener("click", function () {
+  state.current = null;
+  $("detailView").hidden = true;
+  $("listView").hidden = false;
+  refreshStatus().catch(showFatal);
+});
+
+/* 徽标点一下给个明确说法：到底是没开、没连上、还是已经生效了 */
+$("injectBadge").addEventListener("click", function () {
+  refreshInject();
+  svc("menuInject", {}, 8000)
+    .then(function (info) {
+      if (!info || !info.enabled) {
+        toast("没开调试端口。运行 bin\\enable-context-menu.cmd 后重启客户端");
+        return;
+      }
+      toast(
+        (info.connected || 0) > 0
+          ? "已生效：" + info.connected + " 个窗口注入了「复制 Session ID」"
+          : "等主窗口…" + (info.lastError ? "（" + info.lastError + "）" : "")
+      );
+    })
+    .catch(function (e) {
+      toast("查不到状态：" + e.message);
+    });
+});
+function onTabClick(e) {
+  var tab = e.currentTarget;
+  document.querySelectorAll(".tab").forEach(function (node) { node.classList.remove("active"); });
+  tab.classList.add("active");
+  state.tab = tab.dataset.tab;
+  state.current = null;
+  var isHarness = !!harnessIdOf(state.tab);
+  $("composer").hidden = false;
+  $("readonlyBar").hidden = true;
+  $("detailView").hidden = true;
+  $("listView").hidden = false;
+  /* Codex / Claude 没有可用的写入通道，从这里「新建」是假的，干脆不给按钮 */
+  $("btnNew").hidden = isHarness;
+  $("wbSource").hidden = state.tab !== "wb";
+  $("bannerHost").innerHTML = "";
+  loadList();
+}
+
+document.querySelectorAll(".tab").forEach(function (tab) {
+  tab.addEventListener("click", onTabClick);
+});
+
+/* 本机 / 云端是两套 ID 空间，混在一个列表里会让人分不清哪个能用来发消息 */
+document.querySelectorAll("#wbSource button").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    if (state.wbSource === btn.dataset.src) return;
+    state.wbSource = btn.dataset.src;
+    document.querySelectorAll("#wbSource button").forEach(function (node) {
+      node.classList.toggle("on", node === btn);
+    });
+    loadWb();
+  });
+});
+$("search").addEventListener("input", function (e) {
+  state.filter = e.target.value;
+  render();
+});
+$("btnNew").addEventListener("click", openNew);
+$("btnNewCancel").addEventListener("click", closeNew);
+$("btnNewCreate").addEventListener("click", createSession);
+$("btnBack").addEventListener("click", closeDetail);
+$("btnCopyDetail").addEventListener("click", function () {
+  if (state.current) copyId(state.current.id);
+});
+$("composer").addEventListener("submit", sendPrompt);
+$("prompt").addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    sendPrompt(e);
+  }
+});
+$("btnCancel").addEventListener("click", cancelTurn);
+$("newDialog").addEventListener("click", function (e) {
+  if (e.target === $("newDialog")) closeNew();
+});
+
+/* 宿主通道可能比脚本晚到：轮询等 port，最多 12s（宿主门槛是 10s，握手在 head 已完成） */
+var bootTimer = setInterval(function () {
+  if (window.__BRIDGE__.port) {
+    clearInterval(bootTimer);
+    boot();
+  }
+}, 120);
+setTimeout(function () {
+  if (!window.__BRIDGE__.port) {
+    $("statusBar").textContent = "未连接到 WorkBuddy 宿主（请从侧栏打开）";
+    $("statusDot").className = "dot off";
+  }
+}, 12000);
+</script>
+</body>
+</html>

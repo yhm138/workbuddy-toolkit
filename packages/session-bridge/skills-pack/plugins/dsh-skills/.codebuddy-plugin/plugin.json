@@ -1,0 +1,24 @@
+{
+  "name": "dsh-skills",
+  "version": "1.0.0",
+  "description": "DSH 迁移到 WorkBuddy 的技能包：会话操作/检索/时间线、Token 账本、配置盘点、迁移自检。",
+  "author": {
+    "name": "port-dsh-to-workbuddy contributors",
+    "email": ""
+  },
+  "homepage": "https://github.com/yhm138/workbuddy-toolkit",
+  "repository": "https://github.com/yhm138/workbuddy-toolkit",
+  "license": "MIT",
+  "skills": [
+    "./skills/dsh-parity",
+    "./skills/dsh-config-port",
+    "./skills/dsh-session-ops",
+    "./skills/dsh-token-usage",
+    "./skills/dsh-session-search",
+    "./skills/dsh-session-inspector",
+    "./skills/wb-parity-doctor"
+  ],
+  "agents": [
+    "./agents/dsh-session-analyst.md"
+  ]
+}

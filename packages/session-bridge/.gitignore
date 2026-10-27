@@ -1,0 +1,25 @@
+node_modules/
+dist/
+out/
+*.log
+.tmp_*
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+.venv/
+
+# 本机运行产生的备份（install 会写 ~/.workbuddy，仓库里不该出现副本）
+backups/
+*.bak-*
+.dsh-skills.bak/
+
+# 项目内元数据与工作记忆，不入库
+.workbuddy/
+
+# 个人配置导出物：只在本地用于 build，不入库
+dsh-config-export/
+*.zip
+
+# 本地探针产物（bridge-test 结果、面板截图），不入库
+.probe/

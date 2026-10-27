@@ -1,0 +1,29 @@
+{
+  "name": "port-dsh-to-workbuddy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "把 DeepSeek Harness 的使用习惯搬进 WorkBuddy：侧栏扩展「会话桥」+ 7 个技能 + 迁移 CLI（dsh2wb）",
+  "bin": {
+    "dsh2wb": "./bin/dsh2wb.mjs"
+  },
+  "engines": {
+    "node": ">=20.10"
+  },
+  "scripts": {
+    "test": "node --test",
+    "test:panel": "python test/panel_test.py",
+    "inspect": "node bin/dsh2wb.mjs inspect",
+    "build": "node bin/dsh2wb.mjs build",
+    "install:dry": "node bin/dsh2wb.mjs install --dry-run",
+    "doctor": "node bin/dsh2wb.mjs doctor"
+  },
+  "keywords": [
+    "workbuddy",
+    "extension",
+    "deepseek-harness",
+    "mcp",
+    "migration"
+  ],
+  "license": "MIT"
+}

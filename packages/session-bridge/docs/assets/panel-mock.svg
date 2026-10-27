@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="440" viewBox="0 0 760 440" role="img" aria-label="会话桥面板示意图：左侧会话列表，右侧对话内容">
+  <rect width="760" height="440" fill="#f7f8fa"/>
+  <rect x="8" y="8" width="744" height="424" rx="12" fill="#ffffff" stroke="#e3e6ea"/>
+
+  <!-- 顶栏 -->
+  <text x="28" y="42" font-family="'Microsoft YaHei','PingFang SC',sans-serif" font-size="16" font-weight="600" fill="#1f2329">会话桥</text>
+
+  <rect x="606" y="24" width="62" height="26" rx="6" fill="#f2f3f5" stroke="#e3e6ea"/>
+  <text x="637" y="41" text-anchor="middle" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#4e5969">+ 新建</text>
+
+  <rect x="676" y="24" width="52" height="26" rx="6" fill="#f2f3f5" stroke="#e3e6ea"/>
+  <text x="702" y="41" text-anchor="middle" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#4e5969">诊断</text>
+
+  <line x1="8" y1="62" x2="752" y2="62" stroke="#eef0f3"/>
+
+  <!-- 左栏 -->
+  <rect x="20" y="76" width="212" height="24" rx="6" fill="#eef2ff"/>
+  <text x="34" y="92" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#3355d0">本机</text>
+  <text x="86" y="92" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#9aa1ac">DSH</text>
+  <text x="132" y="92" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#9aa1ac">云端</text>
+
+  <!-- 会话行 1（选中） -->
+  <rect x="20" y="110" width="212" height="46" rx="8" fill="#f3f6ff" stroke="#dbe4ff"/>
+  <circle cx="36" cy="133" r="4" fill="#2fa06a"/>
+  <text x="50" y="130" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#1f2329">整理配置导出清单</text>
+  <text x="50" y="146" font-family="'Microsoft YaHei',sans-serif" font-size="10" fill="#9aa1ac">2 分钟前 · 正在运行</text>
+
+  <!-- 会话行 2 -->
+  <text x="36" y="180" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#4e5969">另一个项目的排查</text>
+  <text x="36" y="196" font-family="'Microsoft YaHei',sans-serif" font-size="10" fill="#b3b9c2">1 小时前</text>
+
+  <!-- 会话行 3 -->
+  <text x="36" y="228" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#4e5969">写周报</text>
+  <text x="36" y="244" font-family="'Microsoft YaHei',sans-serif" font-size="10" fill="#b3b9c2">昨天</text>
+
+  <!-- 会话行 4 -->
+  <text x="36" y="276" font-family="'Microsoft YaHei',sans-serif" font-size="12" fill="#4e5969">财务报表核对</text>
+  <text x="36" y="292" font-family="'Microsoft YaHei',sans-serif" font-size="10" fill="#b3b9c2">10 月 22 日</text>
+
+  <line x1="240" y1="62" x2="240" y2="432" stroke="#eef0f3"/>
+
+  <!-- 右栏标题 -->
+  <text x="262" y="92" font-family="'Microsoft YaHei',sans-serif" font-size="13" font-weight="600" fill="#1f2329">整理配置导出清单</text>
+  <rect x="654" y="74" width="74" height="24" rx="6" fill="#f2f3f5" stroke="#e3e6ea"/>
+  <text x="691" y="90" text-anchor="middle" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#4e5969">复制 ID</text>
+
+  <!-- 消息 1（我） -->
+  <rect x="470" y="116" width="258" height="42" rx="10" fill="#eef2ff"/>
+  <text x="486" y="134" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#1f2329">把这周的配置改动整理成一份清单</text>
+  <text x="486" y="150" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#1f2329">我要带到另一台机器上</text>
+
+  <!-- 消息 2（助手） -->
+  <rect x="262" y="170" width="360" height="76" rx="10" fill="#f7f8fa" stroke="#eef0f3"/>
+  <text x="278" y="190" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#1f2329">一共 15 个 bundle、210 个插件行。</text>
+  <text x="278" y="208" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#1f2329">覆盖层是 patch 文件，迁移时跟着一起拷。</text>
+  <text x="278" y="226" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#4e5969">已按「必须 / 建议 / 可选」分好组。</text>
+
+  <!-- 消息 3（我） -->
+  <rect x="520" y="258" width="208" height="26" rx="10" fill="#eef2ff"/>
+  <text x="536" y="275" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#1f2329">给我一份能直接粘的</text>
+
+  <!-- 输入区 -->
+  <rect x="262" y="366" width="466" height="44" rx="10" fill="#ffffff" stroke="#e3e6ea"/>
+  <text x="278" y="393" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#b3b9c2">接着问点什么…</text>
+  <rect x="654" y="378" width="62" height="24" rx="6" fill="#3355d0"/>
+  <text x="685" y="394" text-anchor="middle" font-family="'Microsoft YaHei',sans-serif" font-size="11" fill="#ffffff">发送</text>
+</svg>

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schemas.workbuddy.ai/extension-distribution.v1.json",
+  "extensionId": "dsh-session-bridge",
+  "version": "1.0.0",
+  "kind": "builtin",
+  "grantedPermissions": ["*"],
+  "processPolicy": {
+    "server": "fork",
+    "renderer": "iframe"
+  },
+  "status": "active"
+}

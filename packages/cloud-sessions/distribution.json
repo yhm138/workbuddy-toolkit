@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schemas.workbuddy.ai/extension-distribution.v1.json",
+  "extensionId": "cloud-sessions",
+  "version": "1.11.2",
+  "kind": "builtin",
+  "grantedPermissions": [
+    "*"
+  ],
+  "processPolicy": {
+    "server": "fork",
+    "renderer": "iframe"
+  },
+  "status": "active"
+}
