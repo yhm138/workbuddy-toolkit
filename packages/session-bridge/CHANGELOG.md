@@ -2,6 +2,43 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.1.0 — 2026-10-28
+
+WorkBuddy 5.9.x 起，客户端升级会**整体替换 `resources/`**，装在那儿的 bundled 扩展跟着被清掉。
+这次更新就是对着这件事：留一份稳定副本，再放一个守着它的进程，升级后自己把面板补回来。
+
+### 新增
+
+- **`bin/guard.mjs` 自愈守护**：`~/.workbuddy/dsh-skills/store/<id>` 留一份副本，每 2 秒看一次
+  扩展目录。客户端升级把目录清掉、还没重新启动的那几秒里，守护正好把扩展拷回去。
+  客户端正开着且版本对不上时不动文件——宿主按启动快照取文件，运行期换必然加载失败。
+  目录整个没了则可以补：这次启动根本没加载过它。
+- **开机自启**：往「启动」文件夹放一个 `WorkBuddySessionBridgeGuard.vbs`，登录时静默拉起守护。
+  路径用 `%USERPROFILE%` 拼，用户名带中文也不会乱码；不想用了删掉这个文件即可
+  （Win+R → `shell:startup`）。
+- **`guard.mjs --status` / `--once` / `--add` / `--remove`**：命令行排查，以及把别的扩展
+  一起纳进自愈名单（云端会话就是这么登记的）。
+- `检查状态.cmd` 多一行「升级自愈」，直接看守护在不在跑、store 里是什么版本。
+
+### 修复
+
+- **备份不再写进扩展目录**。旧版把已装的扩展改名成 `dsh-session-bridge.bak-<时间戳>` 留在原地，
+  而宿主校验「目录名必须等于清单里的 id」，这些目录每次启动都被当非法扩展扫一遍。
+  现在备份放 `~/.workbuddy/dsh-skills/backups/`。
+
+### 为什么不直接把扩展放进宿主的用户扩展目录
+
+`~/.workbuddy/extensions` 和 `extensions-dev` 确实会被扫描，但这两处的 `distribution.json`
+不被信任：权限被降级成空的 platform，`service` 也不许 fork（`includeExtension` /
+`allowService` / `allowDiskDistribution` 三处是一致的判断）。装进去只有一个空壳面板，
+所以只能守着会被升级清掉的 bundled 目录。
+
+### 已知限制
+
+- 守护需要一个 Node 运行时：优先用 WorkBuddy 自带的
+  `~/.workbuddy/binaries/node/versions/*/node.exe`，没有才退回 PATH 里的 `node`。
+- 如果升级安装比 2 秒轮询还快，会晚一轮补上——下次启动前一定补好，只是那次要再重启一次。
+
 ## 1.0.0 — 2026-10-26
 
 一键安装版。0.1.0 要「装 Node → `build` → `install` → `install-extension` → 重启 → 打开一次侧栏面板」，
@@ -56,7 +93,7 @@
 
 **会话菜单注入「复制 Session ID」**
 
-> 这部分已抽成独立项目：[workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)
+> 这部分已抽成工具集里的 [`copy-session-id`](../copy-session-id)
 
 - 会话右键菜单补一项「复制 Session ID」，复制完整 UUID
 - 借宿主留给自动化测试的 CDP 调试端口，在渲染进程里补 DOM 节点

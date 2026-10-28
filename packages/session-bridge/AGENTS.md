@@ -24,6 +24,12 @@
 把 DeepSeek Harness 的用法搬到 WorkBuddy：宿主内扩展（service + 面板）、
 命令行（`bin/dsh2wb.mjs`）、技能包（`skills-pack/`）。
 
+**仓库已合并**：2026-10-28 起，这个项目是
+[`yhm138/workbuddy-toolkit`](https://github.com/yhm138/workbuddy-toolkit) 里的
+`packages/session-bridge`。以后改完推那边，旧的 `port-dsh-to-workbuddy` 不再更新。
+同步方式：把改动文件拷到工具集克隆的 `packages/session-bridge/`，在那边提交
+（`使用说明.txt`、`*.cmd` 是 CRLF，其余 LF，`.gitattributes` 会处理）。
+
 ## 常用命令
 
 ```bash
@@ -32,10 +38,15 @@ node bin/dsh2wb.mjs wb-call ping       # service 是否在线
 node bin/dsh2wb.mjs wb-session <ID>    # 回放某个 WorkBuddy 会话
 node bin/dsh2wb.mjs copy-id            # 复制当前会话 ID（读 CODEBUDDY_SESSION_ID）
 node bin/dsh2wb.mjs install-extension  # 把 extension/ 装进客户端（改 service 后必须）
+node bin/guard.mjs --status            # 升级自愈：登记了哪些扩展、装的那份还对不对
+node bin/guard.mjs --once              # 手动跑一轮自愈
 ```
 
 ## 约定
 
+- **客户端整包升级会整体替换 `resources/`**，装在 `resources/.../extensions/<id>` 的扩展会被清掉。
+  这是宿主行为，别试图换个目录放：`~/.workbuddy/extensions(-dev)` 里的 `distribution.json`
+  不被信任，权限降级成空、`service` 不许 fork。只能靠 `bin/guard.mjs` 守着补回来。
 - 单元测试：`node --test test/*.test.mjs`；面板 E2E 用 `py test/panel_test.py`
   （`python` 是内置 3.13，没装 playwright）。
 - `.probe/` 是本地探针产物（bridge-test 结果、截图），不入库。
@@ -43,3 +54,5 @@ node bin/dsh2wb.mjs install-extension  # 把 extension/ 装进客户端（改 se
   改 `extension/ui/index.html` 只需重开面板。
 - `.cmd` 一律纯 ASCII，中文提示放 Node 脚本（cmd.exe 按 GBK 解析，UTF-8 中文会被
   拆成非法命令）。
+- 装/卸载扩展时备份写 `~/.workbuddy/dsh-skills/backups/`，**不要**在扩展目录里留
+  `xxx.bak-*`：宿主按「目录名 == 清单 id」校验，会把它们当非法扩展反复扫。

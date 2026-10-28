@@ -32,11 +32,29 @@
 | 说没有权限 | WorkBuddy 在 `Program Files` 下 | 右键 `一键安装.cmd` → 以管理员身份运行 |
 | 装好了但侧栏没有 | 客户端没真正重启 | 托盘图标右键 → 退出，等它完全消失，再从桌面图标打开 |
 | 面板打开是空白 / 加载失败 | 版本快照没刷新 | 再退出重开一次；还不行双击 `检查状态.cmd` |
+| 客户端升级后面板没了 | 升级会整体替换 `resources/` | 退出重开一次即可，守护一般已经补好了。还不行再跑一次 `一键安装.cmd` |
 
 不想用了：双击 **`一键卸载.cmd`**，再重启一次。只删面板和技能，聊天记录都还在。
 
-想右键会话直接「复制 Session ID」：那是另一个独立项目
-**[workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)**，本仓库里保留着它最早的原型。
+### 客户端升级后面板会自己回来
+
+WorkBuddy 升级时会整体替换 `resources/` 目录，装在那里的扩展会被一起清掉——这是宿主行为，
+改不了。所以安装时会顺带做两件事：
+
+1. 在 `~/.workbuddy/dsh-skills/store/` 留一份扩展副本；
+2. 往「启动」文件夹放一个 `WorkBuddySessionBridgeGuard.vbs`，登录时静默拉起守护进程，
+   每 2 秒看一次扩展目录。升级把目录清掉、客户端还没重新启动的那几秒里，它就把扩展拷回去。
+
+所以升级后直接重新打开客户端，面板通常已经在了。不想让它在后台待着：
+Win+R 输入 `shell:startup`，删掉 `WorkBuddySessionBridgeGuard.vbs`；
+或者干脆双击 `一键卸载.cmd`，它会连守护一起收干净。
+
+> 为什么不能把扩展放进 `~/.workbuddy/extensions` 一劳永逸：那两个用户扩展目录里的
+> `distribution.json` 不被信任，权限会被降级成空，`service` 也不许 fork，装进去只有空壳面板。
+
+
+想右键会话直接「复制 Session ID」：那是同一工具集里的 **[copy-session-id](../copy-session-id)**，
+本仓库里保留着它最早的原型。
 
 ## 用它
 
@@ -142,12 +160,14 @@ wb-session [id]     读本地 WorkBuddy 会话记录（不带 id 列最近会话
 node bin/setup.mjs              # 等于双击一键安装
 node bin/setup.mjs --status     # 状态
 node bin/setup.mjs --uninstall  # 卸载
-node --test test/*.test.mjs     # 55 例
+node --test test/*.test.mjs     # 62 例
+node bin/guard.mjs --status     # 升级自愈在不在跑
 python test/panel_test.py       # 面板 E2E（Playwright + 假宿主）
 ```
 
-`setup.mjs` 只做四件事：把 `extension/` 拷到客户端扩展目录、把 7 个技能拷到 `~/.workbuddy/skills/`、
-重启客户端、等 service 的 `ping` 返回。**重复跑安全**，旧版本自动备份成 `*.bak-<时间戳>`。
+`setup.mjs` 做五件事：把 `extension/` 拷到客户端扩展目录、把 7 个技能拷到 `~/.workbuddy/skills/`、
+装升级自愈并拉起守护、重启客户端、等 service 的 `ping` 返回。**重复跑安全**，
+旧版本备份到 `~/.workbuddy/dsh-skills/backups/extension-<时间戳>/`（不再留在扩展目录里）。
 
 改代码后要生效：
 
@@ -299,8 +319,7 @@ python test/panel_test.py     # 面板 E2E：Playwright + 假宿主，跑完把�
 ## 已知缺口
 
 * **不可移植**：`dsh-codex-ui`（宿主 UI，插件无法注入前端）、`steer` 键位、插件市场自定义索引。
-  * 例外：会话菜单那一处可以用 CDP 绕过去，已抽成独立项目
-    [workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)，
+  * 例外：会话菜单那一处可以用 CDP 绕过去，已抽成 [`copy-session-id`](../copy-session-id)，
     代价是快捷方式要带调试参数。
 * **需手动**：默认模型（`deepseek-flash` + 推理强度 max）、默认权限——**建议不要照搬 `danger-full-access`**，
   改成「工作区可写 + 审批」。

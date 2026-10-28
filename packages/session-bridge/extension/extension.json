@@ -1,7 +1,7 @@
 {
   "id": "dsh-session-bridge",
   "name": "会话桥",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "把 DeepSeek Harness 的会话接到 WorkBuddy 侧栏：复制 Session ID、跨会话发消息、新建 DSH 会话。",
   "ui": {
     "entry": {

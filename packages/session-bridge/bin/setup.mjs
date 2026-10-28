@@ -19,6 +19,7 @@
  *   --root <路径>             手动指定 WorkBuddy 安装目录
  *   --no-restart              装完不重启客户端
  *   --no-skills               只装侧栏面板，不装技能
+ *   --no-guard                不装「升级自愈」守护（升级后要手动重跑）
  *   --yes                     不询问，一律按默认答案
  */
 
@@ -47,6 +48,16 @@ const EXT_SRC = path.join(REPO, 'extension');
 const PLUGIN_SRC = path.join(REPO, 'skills-pack', 'plugins', 'dsh-skills');
 const SKILLS_SRC = path.join(PLUGIN_SRC, 'skills');
 const SCRIPTS_SRC = path.join(PLUGIN_SRC, 'scripts');
+
+/** 自愈守护：客户端整包升级会清掉扩展，靠它把扩展补回去。 */
+const GUARD_SRC = path.join(REPO, 'bin', 'guard.mjs');
+const GUARD_DIR = path.join(STATE_DIR, 'guard');
+const GUARD_SCRIPT = path.join(GUARD_DIR, 'guard.mjs');
+const GUARD_RUN = path.join(GUARD_DIR, 'run.cmd');
+const GUARD_VBS = path.join(GUARD_DIR, 'start.vbs');
+const GUARD_CONFIG = path.join(STATE_DIR, 'guard.json');
+const STORE_DIR = path.join(STATE_DIR, 'store');
+const GUARD_TASK = 'WorkBuddySessionBridgeGuard';
 
 const argv = process.argv.slice(2);
 const has = (flag) => argv.includes(flag);
@@ -183,7 +194,23 @@ function installExtension(root) {
     );
   }
 
-  const backup = replaceDir(EXT_SRC, target);
+  // 备份放到状态目录，不要放在扩展目录里：
+  // 宿主按「目录名 == 清单里的 id」校验，xxx.bak-20261028 这种名字会被当成非法扩展，
+  // 每次启动都白扫一遍、还在日志里刷错误。
+  let backup = '';
+  if (fs.existsSync(target)) {
+    const dest = path.join(STATE_DIR, 'backups', `extension-${stamp()}`);
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.cpSync(target, dest, { recursive: true });
+      backup = dest;
+    } catch {
+      backup = '';
+    }
+  }
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.cpSync(EXT_SRC, target, { recursive: true });
 
   // 装完立刻自检：少一个文件都会让宿主报「插件加载失败」
   const required = [
@@ -223,6 +250,167 @@ function installSkills() {
 function writeManifest(payload) {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(MANIFEST, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+/* ------------------------------ 自愈守护 ------------------------------ */
+
+/**
+ * 客户端整包升级会整体替换 resources/，扩展跟着消失——这是宿主行为，改不了。
+ * 能做的是在外面留一份 store，客户端没在跑的时候补回去。
+ *
+ * 为什么不用宿主自己的用户扩展目录（~/.workbuddy/extensions、extensions-dev）：
+ * 那两个目录里 distribution.json 不被信任，权限会被降级成「什么都不能做」，
+ * service 也不许 fork，装进去只有个空壳面板。源码里 includeExtension /
+ * allowService / allowDiskDistribution 三处都是一样的判断。
+ */
+
+const GUARD_RUN_CMD = `@echo off
+rem Start the WorkBuddy extension guard with whatever Node runtime is available.
+rem ASCII only: cmd.exe parses this file as GBK, non-ASCII would break it.
+setlocal enabledelayedexpansion
+set "NODE="
+for /d %%D in ("%USERPROFILE%\\.workbuddy\\binaries\\node\\versions\\*") do (
+  if exist "%%~fD\\node.exe" set "NODE=%%~fD\\node.exe"
+)
+if not defined NODE for %%P in (node.exe) do if not "%%~$PATH:P"=="" set "NODE=%%~$PATH:P"
+if not defined NODE (
+  >> "%~dp0stdout.log" echo [%DATE% %TIME%] no node runtime found
+  exit /b 1
+)
+"%NODE%" "%~dp0guard.mjs" --watch > "%~dp0stdout.log" 2>&1
+`;
+
+const GUARD_VBS_SRC = `' Launch run.cmd with a hidden window (no console flash on logon).
+' ASCII only: wscript reads .vbs as ANSI by default.
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set sh = CreateObject("WScript.Shell")
+dir = fso.GetParentFolderName(WScript.ScriptFullName)
+sh.Run """" & dir & "\\run.cmd""", 0, False
+`;
+
+/** 写守护运行时：guard.mjs 本体 + 无窗口启动脚本。重复跑覆盖。 */
+function writeGuardRuntime() {
+  fs.mkdirSync(GUARD_DIR, { recursive: true });
+  fs.copyFileSync(GUARD_SRC, GUARD_SCRIPT);
+  fs.writeFileSync(GUARD_RUN, GUARD_RUN_CMD.replace(/\n/g, '\r\n'), 'ascii');
+  fs.writeFileSync(GUARD_VBS, GUARD_VBS_SRC.replace(/\n/g, '\r\n'), 'ascii');
+}
+
+/** 把装好的那份收进 store，并登记到 guard.json。 */
+function registerGuardExtension(id, sourceDir, root) {
+  const dest = path.join(STORE_DIR, id);
+  fs.mkdirSync(STORE_DIR, { recursive: true });
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.cpSync(sourceDir, dest, { recursive: true });
+  const config = readJsonSafe(GUARD_CONFIG, { version: 1, extensions: [] });
+  const extensions = new Set([...(config.extensions || []), id]);
+  fs.writeFileSync(
+    GUARD_CONFIG,
+    `${JSON.stringify({ version: 1, root, extensions: [...extensions], updatedAt: new Date().toISOString() }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
+/**
+ * 为什么用「启动」文件夹，而不是计划任务 / 注册表自启动：
+ * 后两者分别要 schtasks.exe 和 reg.exe，有些机器上这两个被安全策略直接禁掉
+ * （本机就是），而启动文件夹只是往用户自己的目录里放一个 .vbs，不需要管理员，
+ * 也不依赖那两个程序，效果一样：登录时静默把守护拉起来。
+ * 想关掉：Win+R 输入 shell:startup，删掉里面的 WorkBuddySessionBridgeGuard.vbs。
+ */
+function startupDir() {
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  return path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+}
+
+function autoStartFile() {
+  return path.join(startupDir(), `${GUARD_TASK}.vbs`);
+}
+
+/**
+ * 转发脚本里用 %USERPROFILE% 拼路径，不写绝对路径：
+ * .vbs 默认按 ANSI 读，用户名里有中文时写死路径会变乱码。
+ */
+const STARTUP_VBS_SRC = `' WorkBuddy extension guard: start it silently at logon.
+' Remove this file to stop auto repair (Win+R -> shell:startup).
+Set sh = CreateObject("WScript.Shell")
+home = sh.ExpandEnvironmentStrings("%USERPROFILE%")
+sh.Run """" & home & "\\.workbuddy\\dsh-skills\\guard\\start.vbs""", 0, False
+`;
+
+function autoStartInstalled() {
+  return fs.existsSync(autoStartFile());
+}
+
+function ensureAutoStart() {
+  try {
+    fs.mkdirSync(startupDir(), { recursive: true });
+    fs.writeFileSync(autoStartFile(), STARTUP_VBS_SRC.replace(/\n/g, '\r\n'), 'ascii');
+    return { ok: true, how: '启动文件夹' };
+  } catch (error) {
+    return { ok: false, error: String(error.message) };
+  }
+}
+
+function guardPid() {
+  try {
+    const pid = Number(fs.readFileSync(path.join(GUARD_DIR, 'guard.pid'), 'utf8').trim());
+    if (!pid) return 0;
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    return 0;
+  }
+}
+
+function startGuard() {
+  if (guardPid()) return { ok: true, how: '已在跑' };
+  try {
+    const wscript = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wscript.exe');
+    const child = spawn(wscript, ['//B', '//Nologo', GUARD_VBS], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.unref();
+    return { ok: true, how: '已拉起' };
+  } catch (error) {
+    return { ok: false, error: String(error.message) };
+  }
+}
+
+/** 装新版本时要先停掉旧的：跑着的还是内存里那份代码。 */
+function stopGuard() {
+  const pid = guardPid();
+  if (!pid) return;
+  try {
+    process.kill(pid);
+  } catch {
+    /* 已经退了 */
+  }
+  const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && guardPid()) sleepSync(100);
+}
+
+function removeGuard() {
+  try {
+    fs.rmSync(autoStartFile(), { force: true });
+  } catch {
+    /* 本来就没有 */
+  }
+  stopGuard();
+}
+
+/** 从 guard.json 里摘掉一个 id；没有别的扩展了就顺手把守护也停掉。 */
+function unregisterGuardExtension(id) {
+  const config = readJsonSafe(GUARD_CONFIG, { version: 1, extensions: [] });
+  const rest = (config.extensions || []).filter((x) => x !== id);
+  fs.rmSync(path.join(STORE_DIR, id), { recursive: true, force: true });
+  if (!rest.length) {
+    removeGuard();
+    fs.rmSync(GUARD_CONFIG, { force: true });
+    fs.rmSync(GUARD_DIR, { recursive: true, force: true });
+    fs.rmSync(STORE_DIR, { recursive: true, force: true });
+    return;
+  }
+  fs.writeFileSync(GUARD_CONFIG, `${JSON.stringify({ ...config, extensions: rest }, null, 2)}\n`, 'utf8');
 }
 
 /* ------------------------------ 客户端开关 ------------------------------ */
@@ -293,13 +481,13 @@ async function cmdInstall() {
   if (root !== path.dirname(exe || '')) info(dim(`程序位置     ${exe || '(未找到 exe)'}`));
 
   say();
-  say(`  ${bold('[1/4] 侧栏面板')}`);
+  say(`  ${bold('[1/5] 侧栏面板')}`);
   const ext = installExtension(root);
   ok(`已装到        ${dim(ext.target)}`);
   if (ext.backup) info(dim(`旧版本已备份  ${ext.backup}`));
 
   say();
-  say(`  ${bold('[2/4] 技能')}`);
+  say(`  ${bold('[2/5] 技能')}`);
   if (has('--no-skills')) {
     info(dim('按 --no-skills 跳过'));
   } else {
@@ -309,7 +497,26 @@ async function cmdInstall() {
   }
 
   say();
-  say(`  ${bold('[3/4] 重启 WorkBuddy')}`);
+  say(`  ${bold('[3/5] 升级自愈')}`);
+  if (has('--no-guard')) {
+    info(dim('按 --no-guard 跳过：以后客户端升级要手动重跑一次安装'));
+  } else {
+    writeGuardRuntime();
+    registerGuardExtension(EXT_ID, ext.target, root);
+    const auto = ensureAutoStart();
+    if (auto.ok) {
+      ok(`已登记 ${EXT_ID}，登录后自动守着（${auto.how}）`);
+    } else {
+      warn(`自启动没装上：${auto.error}`);
+      info(dim('扩展照用，只是升级后要手动双击一次「一键安装.cmd」。'));
+    }
+    stopGuard();
+    const started = startGuard();
+    if (started.ok) info(dim(`守护进程 ${started.how}`));
+  }
+
+  say();
+  say(`  ${bold('[4/5] 重启 WorkBuddy')}`);
   let restarted = false;
   if (has('--no-restart')) {
     warn('按 --no-restart 跳过。不重启的话新面板不会出现。');
@@ -346,7 +553,7 @@ async function cmdInstall() {
   });
 
   say();
-  say(`  ${bold('[4/4] 确认服务真的起来了')}`);
+  say(`  ${bold('[5/5] 确认服务真的起来了')}`);
   if (!restarted) {
     const probe = await wbCall('ping', { timeout: 4000 }).catch(() => null);
     if (probe && probe.ok) {
@@ -411,6 +618,19 @@ async function cmdStatus() {
   const manifest = readJsonSafe(MANIFEST, null);
   line('安装记录', Boolean(manifest), manifest ? `${manifest.version}（${manifest.installedAt.slice(0, 10)}）` : '没有（可能是手动装的）');
 
+  const guardConfig = readJsonSafe(GUARD_CONFIG, null);
+  const gp = guardPid();
+  const auto = autoStartInstalled();
+  line('升级自愈', Boolean(gp || auto), gp ? `守护在跑（pid ${gp}）` : auto ? '自启动已装，登录时启动' : '没装（升级后面板会丢）');
+  if (guardConfig?.extensions?.length) {
+    const parts = guardConfig.extensions.map((id) => {
+      const storeV = readJsonSafe(path.join(STORE_DIR, id, 'extension.json'))?.version ?? '?';
+      const installedV = root ? readJsonSafe(path.join(extensionsDir(root), id, 'extension.json'))?.version : null;
+      return `${id} store v${storeV} / 装 ${installedV ? `v${installedV}` : '缺失'}`;
+    });
+    info(dim(parts.join('   ')));
+  }
+
   say();
   const probe = await wbCall('ping', { timeout: 4000 }).catch((e) => ({ ok: false, error: String(e.message).split('\n')[0] }));
   if (probe && probe.ok) {
@@ -421,8 +641,13 @@ async function cmdStatus() {
   }
 
   say();
-  if (!extManifest) say(dim('  结论：还没装。双击「一键安装.cmd」。'));
-  else if (!(probe && probe.ok)) say(dim('  结论：面板装了，服务没起来。重启客户端后再看。'));
+  if (!extManifest) {
+    if (gp || auto) {
+      say(dim('  结论：面板被升级清掉了。守护会在客户端退出后自己补回，也可以现在双击「一键安装.cmd」。'));
+    } else {
+      say(dim('  结论：还没装。双击「一键安装.cmd」。'));
+    }
+  } else if (!(probe && probe.ok)) say(dim('  结论：面板装了，服务没起来。重启客户端后再看。'));
   else say(dim('  结论：都正常。左侧栏点「会话桥」即可。'));
   return 0;
 }
@@ -441,6 +666,7 @@ async function cmdUninstall() {
   if (extTarget) say(dim(`    · 侧栏面板  ${extTarget}`));
   say(dim(`    · ${skills.length} 个技能  ${SKILLS_DST}`));
   say(dim(`    · 脚本目录  ${SCRIPTS_DST}`));
+  say(dim(`    · 升级自愈守护（启动文件夹里的 ${GUARD_TASK}.vbs 与后台进程）`));
   say();
   const yes = await ask('确认删除？', true);
   if (!yes) {
@@ -467,6 +693,8 @@ async function cmdUninstall() {
     fs.rmSync(SCRIPTS_DST, { recursive: true, force: true });
   }
   if (fs.existsSync(MANIFEST)) fs.rmSync(MANIFEST, { force: true });
+  unregisterGuardExtension(EXT_ID);
+  ok('升级自愈守护已移除');
 
   ok(`已删除 ${removed} 项`);
   say();

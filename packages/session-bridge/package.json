@@ -1,6 +1,6 @@
 {
   "name": "port-dsh-to-workbuddy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "把 DeepSeek Harness 的使用习惯搬进 WorkBuddy：侧栏扩展「会话桥」+ 7 个技能 + 迁移 CLI（dsh2wb）",

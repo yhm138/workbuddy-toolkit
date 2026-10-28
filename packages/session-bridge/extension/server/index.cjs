@@ -33,7 +33,17 @@ const {
   wbHome,
 } = require("./local.cjs");
 
-const VERSION = "1.0.0";
+/**
+ * 版本号从旁边的 extension.json 读，不写死。
+ * 以前这里是常量，发版时容易只改清单忘了改它，面板「诊断」就会报旧版本号。
+ */
+const VERSION = (() => {
+  try {
+    return require("../extension.json").version;
+  } catch {
+    return "0.0.0";
+  }
+})();
 const WEB = "https://www.workbuddy.cn";
 
 /**
@@ -374,7 +384,13 @@ function activate(wb) {
      */
     createWb: async (ctx, payload) => {
       const cwd = cleanString(payload?.cwd) || defaultCwd;
-      const attempts = [{ cwd }, { workspacePath: cwd }, {}];
+      // 可选：payload.model 指定新会话使用的模型（例如 "DeepSeek-V4.1-Flash"）。
+      // 宿主没有公开入参形状，所以带 model 的几种形态先试，失败再退回只传 cwd，
+      // 保证在不支持 model 的宿主上行为与以前完全一致。
+      const model = cleanString(payload?.model);
+      const attempts = model
+        ? [{ cwd, model }, { cwd, model, modelId: model }, { workspacePath: cwd, model }, { cwd }]
+        : [{ cwd }, { workspacePath: cwd }, {}];
       const trace = [];
       for (const args of attempts) {
         try {

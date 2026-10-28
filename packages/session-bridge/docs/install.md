@@ -10,7 +10,7 @@ Node 22 直接跑安装脚本。这也是为什么安装器能做成双击——
 
 | 脚本 | 干什么 |
 | --- | --- |
-| `一键安装.cmd` | 装 / 修复。重复跑安全，旧版本备份成 `*.bak-<时间戳>` |
+| `一键安装.cmd` | 装 / 修复。重复跑安全，旧版本备份到 `~/.workbuddy/dsh-skills/backups/` |
 | `检查状态.cmd` | 逐项检查：安装目录、客户端在不在跑、面板版本、技能数量、服务是否在线 |
 | `一键卸载.cmd` | 按 `~/.workbuddy/dsh-skills/install.json` 的记录删，只删自己装的东西 |
 | `dsh2wb.cmd` | 命令行工具，等同 `node bin/dsh2wb.mjs` |
@@ -18,14 +18,39 @@ Node 22 直接跑安装脚本。这也是为什么安装器能做成双击——
 手动参数：`install.cmd --root "D:\你的\WorkBuddy"`、`--no-skills`（只装面板）、
 `--no-restart`、`--restart`、`--yes`。
 
-安装器实际做的四步（对应 `bin/setup.mjs`）：
+安装器实际做的五步（对应 `bin/setup.mjs`）：
 
 1. 把 `extension/` 拷到 `<WorkBuddy>/resources/app.asar.unpacked/resources/extensions/dsh-session-bridge/`
 2. 把 `skills-pack/plugins/dsh-skills/skills/*` 拷到 `~/.workbuddy/skills/`，脚本拷到 `~/.workbuddy/dsh-skills/scripts/`
-3. 重启客户端（交互式才问；非交互一律不动用户的窗口）
-4. 轮询 `ping` 最多 90 秒，通了才打印「装好了」
+3. 装「升级自愈」：副本进 `~/.workbuddy/dsh-skills/store/`，启动文件夹放一个 `.vbs`，并立刻拉起守护
+4. 重启客户端（交互式才问；非交互一律不动用户的窗口）
+5. 轮询 `ping` 最多 90 秒，通了才打印「装好了」
 
-卸载只删这两处 + `install.json` 自己；`~/.dsh/`、`~/.workbuddy/projects/`、`mcp.json` 一概不动。
+旧版本备份现在放 `~/.workbuddy/dsh-skills/backups/extension-<时间戳>/`，不再留在扩展目录里——
+宿主校验「目录名 == 清单 id」，`xxx.bak-20261028` 会被当成非法扩展。
+
+卸载只删这两处 + `install.json` + 守护；`~/.dsh/`、`~/.workbuddy/projects/`、`mcp.json` 一概不动。
+
+### 升级自愈是怎么回事
+
+客户端 5.9.x 起，整包升级会替换整个 `resources/` 目录，bundled 扩展跟着消失。守护的做法：
+
+```bash
+node bin/guard.mjs --status        # 守护在不在跑、登记了哪些扩展、store 里什么版本
+node bin/guard.mjs --once          # 手动跑一轮（排查用）
+node bin/guard.mjs --add <id> --from <已装目录>   # 把别的扩展也纳进来
+node bin/guard.mjs --remove <id>   # 取消登记
+```
+
+- 每 2 秒一轮；客户端开着且版本对不上时不动文件（宿主按启动快照取文件，运行期换必坏）。
+- 目录整个没了则可以补：这次启动根本没加载过它。
+- 日志在 `~/.workbuddy/dsh-skills/guard/guard.log`，超过 256 KB 自动轮转。
+- 关掉自启动：Win+R → `shell:startup` → 删 `WorkBuddySessionBridgeGuard.vbs`。
+
+**为什么不放进宿主的用户扩展目录**：`~/.workbuddy/extensions` 与 `extensions-dev` 会被扫描，
+但里面的 `distribution.json` 不被信任——权限降级成空的 platform，`service` 不许 fork。
+装进去只有空壳面板，所以只能守着 bundled 目录（`src/core/wb.mjs` 里那句「扩展只能放在这里」）。
+
 
 ---
 
