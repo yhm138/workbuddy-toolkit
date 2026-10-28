@@ -622,6 +622,7 @@ async function cmdStatus() {
   const gp = guardPid();
   const auto = autoStartInstalled();
   line('升级自愈', Boolean(gp || auto), gp ? `守护在跑（pid ${gp}）` : auto ? '自启动已装，登录时启动' : '没装（升级后面板会丢）');
+  if (auto && !gp) info(dim('这次没在跑：下次登录会自动起来，急用就再跑一次「一键安装.cmd」。'));
   if (guardConfig?.extensions?.length) {
     const parts = guardConfig.extensions.map((id) => {
       const storeV = readJsonSafe(path.join(STORE_DIR, id, 'extension.json'))?.version ?? '?';
