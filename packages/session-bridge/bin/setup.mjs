@@ -619,10 +619,21 @@ async function cmdStatus() {
   line('安装记录', Boolean(manifest), manifest ? `${manifest.version}（${manifest.installedAt.slice(0, 10)}）` : '没有（可能是手动装的）');
 
   const guardConfig = readJsonSafe(GUARD_CONFIG, null);
-  const gp = guardPid();
+  let gp = guardPid();
   const auto = autoStartInstalled();
+  if (auto && !gp) {
+    // 状态本来就是个「看一眼」的命令，但守护没在跑时顺手拉起来更省事
+    startGuard();
+    const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    const deadline = Date.now() + 2500;
+    while (!gp && Date.now() < deadline) {
+      sleepSync(100);
+      gp = guardPid();
+    }
+    if (gp) info(dim(`守护刚才没在跑，已顺手拉起（pid ${gp}）`));
+  }
   line('升级自愈', Boolean(gp || auto), gp ? `守护在跑（pid ${gp}）` : auto ? '自启动已装，登录时启动' : '没装（升级后面板会丢）');
-  if (auto && !gp) info(dim('这次没在跑：下次登录会自动起来，急用就再跑一次「一键安装.cmd」。'));
+  if (auto && !gp) info(dim('这次没拉起来也没关系：下次登录会自动启动。'));
   if (guardConfig?.extensions?.length) {
     const parts = guardConfig.extensions.map((id) => {
       const storeV = readJsonSafe(path.join(STORE_DIR, id, 'extension.json'))?.version ?? '?';
