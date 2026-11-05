@@ -98,7 +98,7 @@ def main() -> int:
         except Exception:
             failures.append("点菜单复制没有调用 copyText")
         copied = page.evaluate("() => window.__COPIED__")
-        if copied != "session-a1b2c3d4-0004-4a00-8000-000000000004":
+        if copied != "session-22222222-2222-4222-8222-222222222222":
             failures.append(f"复制内容不对：{copied}")
 
         # ⋯ 按钮走同一条菜单，且「在资源管理器中显示」能拿到 cwd
@@ -117,7 +117,7 @@ def main() -> int:
         if msg_count != 2:
             failures.append(f"详情消息应为 2 条，实际 {msg_count}")
         detail_id = frame.locator("#dId").inner_text()
-        if detail_id != "session-a1b2c3d4-0004-4a00-8000-000000000004":
+        if detail_id != "session-22222222-2222-4222-8222-222222222222":
             failures.append(f"详情 ID 不对：{detail_id}")
 
         # 系统注入默认隐藏，但要告诉用户藏了几条
@@ -254,6 +254,63 @@ def main() -> int:
         page.wait_for_timeout(2200)
         page.locator("#panel").screenshot(path=shot_path("panel-codex.png"))
         frame.locator("#btnBack").click()
+
+        # 宿主通道：31 条只放行 16 条，写入类只展示、点开也调不动
+        frame.locator('.tab[data-tab="host"]').click()
+        try:
+            frame.locator("#hostList .hrow").first.wait_for(timeout=8000)
+        except Exception:
+            failures.append("宿主通道清单没有渲染")
+        frames_rows = frame.locator("#hostList .hrow").count()
+        if frames_rows != 3:
+            failures.append(f"通道行数不对，实际 {frames_rows}")
+        if not frame.locator("#btnNew").is_hidden():
+            failures.append("宿主通道页不应显示「+ 新建」")
+        if frame.locator("#hostList .tag.read").count() < 1:
+            failures.append("只读通道缺少「只读」标记")
+        page.wait_for_timeout(300)
+        page.locator("#panel").screenshot(path=shot_path("panel-host-list.png"))
+
+        # 不放行的那条：能点开看说明，但按钮禁用
+        frame.locator("#hostList .hrow.deny").first.click()
+        frame.locator("#hostDetail").wait_for(state="visible", timeout=4000)
+        frame.locator("#btnHostRun").wait_for(state="visible", timeout=2000)
+        if not frame.locator("#btnHostRun").is_disabled():
+            failures.append("不放行的通道，调用按钮应禁用")
+        if "不放行" not in frame.locator("#hostWarn").inner_text():
+            failures.append("不放行的通道没有给出说明")
+        if frame.locator("#btnHostTpl").is_hidden():
+            failures.append("通道详情缺少「填示例」")
+        frame.locator("#btnHostBack").click()
+        frame.locator("#hostView").wait_for(state="visible", timeout=4000)
+
+        # configSet*：选一个本机会话，模板里的占位符要被替换成真实 ID
+        frame.locator("#hostList .hrow", has_text="configSetThoughtLevel").click()
+        frame.locator("#hostDetail").wait_for(state="visible", timeout=4000)
+        try:
+            frame.locator("#hostConv").select_option(index=1, timeout=4000)
+        except Exception:
+            failures.append("通道详情里没有可选的会话列表")
+        args_text = frame.locator("#hostArgs").input_value()
+        if "44444444" not in args_text:
+            failures.append(f"选会话后参数没带上 ID：{args_text}")
+        frame.locator("#btnHostRun").click()
+        try:
+            page.wait_for_function("() => window.__HOST_CALL__", timeout=8000)
+        except Exception:
+            failures.append("点「调用」没有走到 hostInvoke")
+        host_call = page.evaluate("() => window.__HOST_CALL__")
+        if host_call and host_call.get("channel") != "wb:conversations:configSetThoughtLevel":
+            failures.append(f"hostInvoke 通道不对：{host_call}")
+        if host_call and "max" not in (host_call.get("args") or []):
+            failures.append(f"hostInvoke 参数没有原样透传：{host_call}")
+        try:
+            frame.locator("#hostOut", has_text='"total": 1').wait_for(timeout=5000)
+        except Exception:
+            failures.append(f"返回没有原样显示：{frame.locator('#hostOut').inner_text()[:120]}")
+        page.wait_for_timeout(300)
+        page.locator("#panel").screenshot(path=shot_path("panel-host.png"))
+        frame.locator("#btnHostBack").click()
 
         # 新建会话弹窗（DSH 侧）
         frame.locator('.tab[data-tab="dsh"]').click()

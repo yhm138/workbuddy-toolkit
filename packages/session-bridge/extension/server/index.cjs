@@ -62,6 +62,7 @@ const QUEUE_ALLOWED = new Set([
   "listDsh",
   "listWb",
   "createWb",
+  "configWb",
   "promptWb",
   "requestsWb",
   "readWbLocal",
@@ -74,7 +75,66 @@ const QUEUE_ALLOWED = new Set([
   "createDsh",
   "cancelDsh",
   "copyText",
+  "hostChannels",
+  "hostInvoke",
 ]);
+
+/**
+ * 宿主 `wb:conversations:*` 通道清单（31 条），照官方扩展 edge-sync 的绑定表抄的。
+ * edge-sync 自己没界面、没安装包，但 server/index.cjs 里把宿主的通道全挂了一遍，
+ * 是唯一一份「真实字段名 + 真实参数形状」的现成参考。
+ *
+ * allow 的含义：
+ *   read   —— 只读，随便调，最坏也就是返回一片 JSON
+ *   config —— configSet*，改的是会话的配置项（模型 / 上下文 / 思考强度 / 模式），
+ *             不碰会话正文，也不动磁盘上的文件
+ *   deny   —— 会写会话内容、删会话、发消息、改标题，面板只展示不放行
+ *
+ * sample 里出现 "<会话ID>" 的，面板会拿当前选中的会话 ID 去替换；
+ * verified=false 表示参数形状是猜的，宿主可能直接抛错，当成探测用。
+ */
+const HOST_CHANNELS = [
+  { id: "list", group: "读取", allow: "read", verified: true, sample: [], note: "列出本机会话；分页与筛选参数未公开，空参即可" },
+  { id: "listByIds", group: "读取", allow: "read", verified: false, sample: [["<会话ID>"]], note: "按 ID 批量取会话，首个参数应是 ID 数组" },
+  { id: "listPinned", group: "读取", allow: "read", verified: false, sample: [], note: "置顶会话列表" },
+  { id: "get", group: "读取", allow: "read", verified: true, sample: ["<会话ID>"], note: "单个会话的元信息（标题 / 工作目录 / 模型）" },
+  { id: "getPendingInfo", group: "读取", allow: "read", verified: false, sample: ["<会话ID>"], note: "这一轮还卡在什么上（待批准的工具调用等）" },
+  { id: "listProgress", group: "读取", allow: "read", verified: false, sample: [], note: "正在跑的会话进度" },
+  { id: "requests", group: "读取", allow: "read", verified: true, sample: ["<会话ID>", { limit: 20 }], note: "会话正文，一条 item = 一问一答" },
+  { id: "requestEntries", group: "读取", allow: "read", verified: false, sample: ["<会话ID>", "<requestId>"], note: "某一条请求的明细分片" },
+
+  { id: "configSetModel", group: "配置", allow: "config", verified: true, sample: ["<会话ID>", "deepseek-v4.1-flash"], note: "按模型 id 设，不是界面上的显示名" },
+  { id: "configSetContextWindow", group: "配置", allow: "config", verified: true, sample: ["<会话ID>", 1000000], note: "300000 / 600000 / 1000000" },
+  { id: "configSetThoughtLevel", group: "配置", allow: "config", verified: true, sample: ["<会话ID>", "max"], note: "low / high / max" },
+  { id: "configSetMode", group: "配置", allow: "config", verified: false, sample: ["<会话ID>", "agent"], note: "对话模式（agent / plan / ask）" },
+  { id: "configSetPermissionMode", group: "配置", allow: "config", verified: false, sample: ["<会话ID>", "acceptEdits"], note: "权限模式，取值与界面下拉一致" },
+  { id: "configSetExpert", group: "配置", allow: "config", verified: false, sample: ["<会话ID>", "<专家ID>"], note: "绑定专家，传 expertId" },
+  { id: "configSetConnectors", group: "配置", allow: "config", verified: false, sample: ["<会话ID>", []], note: "会话可用的连接器 id 数组" },
+  { id: "configSetPreMessageCompactPct", group: "配置", allow: "config", verified: false, sample: ["<会话ID>", 80], note: "上下文压缩触发阈值（百分比）" },
+
+  { id: "create", group: "写入", allow: "deny", note: "建会话；用面板的「新建」或 createWb" },
+  { id: "delete", group: "写入", allow: "deny", note: "删会话" },
+  { id: "fork", group: "写入", allow: "deny", note: "从某条消息分叉一个新会话" },
+  { id: "rename", group: "写入", allow: "deny", note: "改标题" },
+  { id: "sendPrompt", group: "写入", allow: "deny", note: "发消息；用 promptWb" },
+  { id: "cancel", group: "写入", allow: "deny", note: "掐掉正在跑的这一轮" },
+  { id: "archive", group: "写入", allow: "deny", note: "归档会话" },
+  { id: "unarchive", group: "写入", allow: "deny", note: "取消归档" },
+  { id: "pin", group: "写入", allow: "deny", note: "置顶" },
+  { id: "unpin", group: "写入", allow: "deny", note: "取消置顶" },
+  { id: "reorderPinned", group: "写入", allow: "deny", note: "调整置顶顺序" },
+  { id: "move", group: "写入", allow: "deny", note: "挪到别的项目/分组" },
+  { id: "markRead", group: "写入", allow: "deny", note: "标记已读，会改会话状态" },
+  { id: "resolvePending", group: "写入", allow: "deny", note: "批准一个待确认的工具调用" },
+  { id: "rejectPending", group: "写入", allow: "deny", note: "拒绝一个待确认的工具调用" },
+];
+
+const HOST_PREFIX = "wb:conversations:";
+const HOST_ALLOWED = new Set(HOST_CHANNELS.filter((c) => c.allow !== "deny").map((c) => c.id));
+/** 一次调用最多带 8 个位置参数；再多基本就是拼错了，早点报错比让宿主瞎猜好。 */
+const HOST_MAX_ARGS = 8;
+/** 单个返回值最多原样带回 200 KB，超了截断并标记——面板是 <pre> 里看的，塞不下也没意义。 */
+const HOST_RESULT_LIMIT = 200000;
 
 function bridgeQueueDir() {
   return path.join(wbHome(), "dsh-skills", "bridge-queue");
@@ -388,9 +448,47 @@ function activate(wb) {
       // 宿主没有公开入参形状，所以带 model 的几种形态先试，失败再退回只传 cwd，
       // 保证在不支持 model 的宿主上行为与以前完全一致。
       const model = cleanString(payload?.model);
-      const attempts = model
-        ? [{ cwd, model }, { cwd, model, modelId: model }, { workspacePath: cwd, model }, { cwd }]
-        : [{ cwd }, { workspacePath: cwd }, {}];
+      // 可选：payload.contextWindow 指定上下文长度（例如 1000000）。
+      // 模型定义里 supportedLengths 是按会话生效的，宿主的建会话入参名未知，
+      // 所以把几种可能的字段名依次试一遍；宿主忽略未知字段时行为与只传 cwd 一致。
+      const contextWindow = Number(payload?.contextWindow) || 0;
+      const ctxVariants = contextWindow
+        ? [
+            { contextWindow },
+            { contextWindow, contextWindowSize: contextWindow },
+            { contextWindow, maxContextWindow: contextWindow },
+            { contextWindow, contextLength: contextWindow },
+            { contextWindow, maxInputTokens: contextWindow },
+          ]
+        : [];
+      // 可选：payload.thoughtLevel 指定思考强度（sessions 表的 thought_level 列，
+      // UI 里叫「思考强度」，取值 low / high / max）。宿主入参名按该列的 camelCase 猜，
+      // 猜错时宿主多半抛错，那就换下一个字段名。
+      const thoughtLevel =
+        cleanString(payload?.thoughtLevel) || cleanString(payload?.thought_level);
+      const effortVariants = thoughtLevel
+        ? [
+            { thoughtLevel },
+            { thoughtLevel, thought_level: thoughtLevel },
+            { thoughtLevel, effort: thoughtLevel },
+            { thoughtLevel, reasoningEffort: thoughtLevel },
+          ]
+        : [];
+      const baseArgs = model ? { cwd, model } : { cwd };
+      // 先试「上下文 + 思考强度」的全量形态，再退到只带上下文的旧形态，
+      // 最后退到只带 model / 只带 cwd，保证老宿主行为不变。
+      const fullVariants = [];
+      if (contextWindow && thoughtLevel) {
+        for (const v of ctxVariants) for (const e of effortVariants) fullVariants.push({ ...v, ...e });
+      }
+      const attempts = [
+        ...fullVariants.map((v) => ({ ...baseArgs, ...v })),
+        ...ctxVariants.map((v) => ({ ...baseArgs, ...v })),
+        ...effortVariants.map((v) => ({ ...baseArgs, ...v })),
+        ...(model
+          ? [{ cwd, model }, { cwd, model, modelId: model }, { workspacePath: cwd, model }, { cwd }]
+          : [{ cwd }, { workspacePath: cwd }, {}]),
+      ];
       const trace = [];
       for (const args of attempts) {
         try {
@@ -407,6 +505,126 @@ function activate(wb) {
       }
       probeLog("createWb failed", { cwd, trace });
       throw fault(`宿主要么拒绝了建会话：${JSON.stringify(trace).slice(0, 600)}`, "WB_CREATE_FAILED");
+    },
+
+    /**
+     * configWb：改一个已存在会话的模型 / 上下文长度 / 思考强度。
+     *
+     * 建会话时宿主只认 cwd 与 model，contextWindow 和 thoughtLevel 会被静默丢掉，
+     * 所以这三项要在建完之后单独设。宿主通道是：
+     *   wb:conversations:configSetModel
+     *   wb:conversations:configSetContextWindow
+     *   wb:conversations:configSetThoughtLevel
+     * 参数形状没有公开，第二个参数可能是裸值、{value}、{<字段名>} 或 {level}，
+     * 依次试到宿主不抛错为止。调用方必须回查 workbuddy.db 的 sessions 表确认真的生效。
+     */
+    configWb: async (ctx, payload) => {
+      const conversationId = cleanString(payload?.conversationId);
+      if (!conversationId) throw fault("缺少 conversationId", "INVALID_ARGUMENT");
+      const jobs = [];
+      const model = cleanString(payload?.model);
+      if (model) jobs.push(["configSetModel", "model", model]);
+      const contextWindow = Number(payload?.contextWindow) || 0;
+      if (contextWindow) jobs.push(["configSetContextWindow", "contextWindow", contextWindow]);
+      const thoughtLevel = cleanString(payload?.thoughtLevel) || cleanString(payload?.thought_level);
+      if (thoughtLevel) jobs.push(["configSetThoughtLevel", "thoughtLevel", thoughtLevel]);
+      if (!jobs.length) throw fault("没有要改的项", "INVALID_ARGUMENT");
+
+      const results = [];
+      for (const [channel, key, value] of jobs) {
+        const variants = [
+          [conversationId, value],
+          [conversationId, { [key]: value }],
+          [conversationId, { value }],
+          [conversationId, { level: value }],
+        ];
+        let done = false;
+        for (const args of variants) {
+          try {
+            const res = await wbCall(wb, `wb:conversations:${channel}`, ...args);
+            results.push({ channel, variant: JSON.stringify(args[1]), ok: true, shape: shapeOf(res) });
+            done = true;
+            break;
+          } catch (error) {
+            results.push({ channel, variant: JSON.stringify(args[1]), ok: false, error: error.message });
+          }
+        }
+        if (!done) results.push({ channel, ok: false, error: "所有参数形态都被拒" });
+      }
+      probeLog("configWb", { conversationId, results });
+      return { ok: true, conversationId, results };
+    },
+
+    /**
+     * hostChannels：给面板的「宿主通道」页用的清单。
+     *
+     * 31 条里只放行 16 条（8 条只读 + 8 条 configSet*）。剩下 15 条会写会话内容、
+     * 删会话、发消息，一律只展示不放行——这个面板是调试台，不是遥控器。
+     */
+    hostChannels: async () => ({
+      ok: true,
+      total: HOST_CHANNELS.length,
+      allowed: HOST_ALLOWED.size,
+      prefix: HOST_PREFIX,
+      channels: HOST_CHANNELS.map((c) => ({
+        ...c,
+        channel: `${HOST_PREFIX}${c.id}`,
+        allowed: c.allow !== "deny",
+      })),
+    }),
+
+    /**
+     * hostInvoke：原样透传一次宿主调用。
+     *
+     * 参数按位置传给 daemon（宿主那侧就是 (conversationId, ...rest) 的形状），
+     * 所以 payload.args 必须是一个 JSON 数组，不做任何字段名猜测——
+     * 猜字段名那套放在 configWb 里，这里是「我知道我要传什么」的场景。
+     *
+     * 返回值原样带回去（超过 200 KB 截断），不解析、不美化，
+     * 因为看这个页的人要的就是宿主到底回了什么。
+     */
+    hostInvoke: async (ctx, payload) => {
+      const raw = cleanString(payload?.channel) || cleanString(payload?.id);
+      if (!raw) throw fault("缺少 channel", "INVALID_ARGUMENT");
+      const id = raw.startsWith(HOST_PREFIX) ? raw.slice(HOST_PREFIX.length) : raw;
+      if (!HOST_ALLOWED.has(id)) {
+        throw fault(`通道 ${HOST_PREFIX}${id} 不在放行名单里（只放只读与 configSet*）`, "FORBIDDEN");
+      }
+
+      let args = payload?.args;
+      if (args === undefined || args === null) args = [];
+      if (!Array.isArray(args)) throw fault("args 必须是 JSON 数组，按位置透传", "INVALID_ARGUMENT");
+      if (args.length > HOST_MAX_ARGS) {
+        throw fault(`参数最多 ${HOST_MAX_ARGS} 个，收到 ${args.length} 个`, "INVALID_ARGUMENT");
+      }
+
+      const channel = `${HOST_PREFIX}${id}`;
+      const started = Date.now();
+      try {
+        const result = await wbCall(wb, channel, ...args);
+        const packed = packHostResult(result);
+        probeLog("hostInvoke ok", {
+          channel,
+          args,
+          ms: Date.now() - started,
+          shape: shapeOf(result),
+          truncated: packed.truncated,
+        });
+        return {
+          ok: true,
+          channel,
+          args,
+          ms: Date.now() - started,
+          result: packed.value,
+          truncated: packed.truncated,
+          bytes: packed.bytes,
+        };
+      } catch (error) {
+        probeLog("hostInvoke failed", { channel, args, ms: Date.now() - started, error: error.message });
+        const wrapped = fault(`${channel} 调用失败：${error.message}`, error.code || "HOST_CHANNEL_FAILED");
+        wrapped.channel = channel;
+        throw wrapped;
+      }
     },
 
     promptWb: async (ctx, payload) => {
@@ -864,6 +1082,32 @@ function shapeOf(value) {
 function clip(text, max) {
   const value = String(text ?? "");
   return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+/**
+ * 把宿主返回原样打包给面板。
+ *
+ * 走一趟 JSON 序列化有两个目的：① 丢掉 class / undefined / 函数这类结构化克隆
+ * 会直接抛错的成员；② 量一下真实体积。宿主返回过整段会话正文，20 万字符够看了，
+ * 再大就截断并告诉调用方「这不是全部」。
+ */
+function packHostResult(value) {
+  if (value === undefined) return { value: null, truncated: false, bytes: 0 };
+  let text;
+  try {
+    text = JSON.stringify(value);
+  } catch {
+    text = String(value);
+  }
+  if (text === undefined) return { value: null, truncated: false, bytes: 0 };
+  if (text.length > HOST_RESULT_LIMIT) {
+    return { value: `${text.slice(0, HOST_RESULT_LIMIT)}…`, truncated: true, bytes: text.length };
+  }
+  try {
+    return { value: JSON.parse(text), truncated: false, bytes: text.length };
+  } catch {
+    return { value: text, truncated: false, bytes: text.length };
+  }
 }
 
 module.exports = { activate, VERSION, flattenWbRequests, wbMessageText };

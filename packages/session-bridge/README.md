@@ -5,7 +5,7 @@
 **在 WorkBuddy 侧栏装一个「会话桥」：所有会话一屏看完，点开就能接着问。**
 
 [![ci](https://github.com/yhm138/workbuddy-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/yhm138/workbuddy-toolkit/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/yhm138/workbuddy-toolkit?color=2fa06a)](https://github.com/yhm138/workbuddy-toolkit/releases)
+[![release](https://img.shields.io/github/v/release/yhm138/port-dsh-to-workbuddy?color=2fa06a)](https://github.com/yhm138/workbuddy-toolkit/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![platform](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-lightgrey.svg)](#装)
 
@@ -53,8 +53,8 @@ Win+R 输入 `shell:startup`，删掉 `WorkBuddySessionBridgeGuard.vbs`；
 > `distribution.json` 不被信任，权限会被降级成空，`service` 也不许 fork，装进去只有空壳面板。
 
 
-想右键会话直接「复制 Session ID」：那是同一工具集里的 **[copy-session-id](../copy-session-id)**，
-本仓库里保留着它最早的原型。
+想右键会话直接「复制 Session ID」：那是另一个独立项目
+**[workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)**，本仓库里保留着它最早的原型。
 
 ## 用它
 
@@ -190,6 +190,7 @@ python test/panel_test.py       # 面板 E2E（Playwright + 假宿主）
 | 看得到桌面端的 WorkBuddy 会话 | 「本机」源扫 `~/.workbuddy/projects/<项目>/<会话>.jsonl`；「云端」源走 `wb.http.get`（数字 ID，另一套空间） |
 | WorkBuddy 新会话 + 双向对话 | `wb:conversations:create` → `sendPrompt`（收 ContentBlock[]）→ `requests` 读回复 |
 | 其他本地 harness（Codex / Claude） | 标签页按探测结果动态生成，只读；能看内容 / 复制 ID / 复制恢复命令 |
+| 宿主通道调试台 | 第三页列 31 条 `wb:conversations:*`，放行 16 条（只读 + `configSet*`），参数按位置透传，返回原样显示 |
 | 断线降级 | MCP 不通时列表退回扫 `~/.dsh/sessions/` 磁盘历史，显式提示「离线」 |
 
 ## 扩展契约（改面板前先读）
@@ -268,6 +269,23 @@ dsh2wb wb-call createWb --payload '{"cwd":"D:/your/project"}'
 dsh2wb wb-call requestsWb --payload '{"conversationId":"..."}'
 ```
 
+`createWb` 只认 `cwd` 与 `model`。`contextWindow` 与 `thoughtLevel` 传进去会被宿主**静默丢掉**
+（不报错、照建会话，回查 `sessions` 表两列是 `NULL`），所以要分两步：建完再用 `configWb` 设。
+
+| 字段 | 取值 | 落点 | 走哪条 |
+| --- | --- | --- | --- |
+| `model` | 模型 id（如 `deepseek-v4.1-flash`） | `sessions.model` | `createWb`，传显示名会失败 |
+| `contextWindow` | 300000 / 600000 / 1000000 | `sessions.context_window` | `configWb` |
+| `thoughtLevel` | `low` / `high` / `max` | `sessions.thought_level`，界面叫「思考强度」 | `configWb` |
+
+```bash
+dsh2wb wb-call configWb --payload '{"conversationId":"...","contextWindow":1000000,"thoughtLevel":"max"}'
+```
+
+`configWb` 走宿主的 `wb:conversations:configSetContextWindow` 与 `configSetThoughtLevel`
+通道，第二个参数的形状没有公开，桥内按裸值 / `{value}` / `{<字段名>}` / `{level}` 依次试。
+建完必须回查 `sessions` 表确认真的落上了，别只看返回的 `args`。
+
 - 白名单制：只放行会话相关 + 只读方法，不接受任意代码执行
 - 请求文件先 `rename` 成 `.taken` 再执行，重复扫描不会跑两遍
 - 前提是 service 正在运行（客户端启动时 fork，不需要先点开面板）
@@ -295,6 +313,89 @@ dsh2wb wb-call requestsWb --payload '{"conversationId":"..."}'
 `requestsWb` 只吐已完成的请求，本地记录里连注入的 system-reminder 都在，时间线会剔掉它们。
 一次真实往返的记录见 [`docs/bridge-demo.md`](docs/bridge-demo.md)。
 
+## 对照官方扩展 edge-sync
+
+这一层最容易踩的坑是**参数形状全靠猜**：通道名在源码里，字段名和参数形态不在。猜错时宿主
+大多不报错，只是静默不生效——`createWb` 丢掉 `contextWindow` 就是这么来的。
+
+WorkBuddy 自带一个官方扩展 **edge-sync**（端云一体同步，代码里还带着一套调试面板），把宿主
+`wb:conversations:*` 的 31 条通道全挂上了：`list` / `get` / `create` / `fork` / `rename` / `move` /
+`delete` / `pin` / `archive` / `sendPrompt` / `cancel` / `requests` / `configSet*` / `resolvePending` ……
+本桥的队列白名单只是它的一个小子集。**调宿主通道之前先翻它的源码**，能省掉大半天试错：
+
+* `SESSION_LIST_SELECT_COLUMNS` 里明写着 `thought_level AS thoughtLevel, context_window AS contextWindow`，
+  所以 `sessions` 表那两列就是界面上的「思考强度」「上下文长度」，不用再猜。
+* `configSetContextWindow(e, t)` 的实现是
+  `updateConfig(e, e => e.configManager.setContextWindow(t), void 0, [{key: 'context_window', value: t}])`：
+  **第二个参数是裸值，不是对象**。`configSetThoughtLevel` / `configSetModel` 同一个形状。
+* `configSet*` 那一组统一写成 `localConversationMethod('wb:conversations:xxx')`，展开就是
+  `{ localConversationIdArg: 0 }`：**第一个参数是 conversationId，后面的参数原样透传给 daemon**
+  （`invoke(channel, ...preparedArgs)`）。
+
+本桥的参数形状很多是照着它推出来的，猜错的代价是静默失败。知道「裸值 + 后位透传」之后
+本可以不用四形态轮询，但老版本宿主未必同一个形状，桥里仍保留依次尝试。
+
+**两个各干各的。** 本桥不替代 edge-sync：它做端云同步，本桥补的是
+「命令行可达 + 文件队列」这一层——CLI 进程拿不到 daemon 的 RPC 票据，只能往队列丢文件转一手。
+
+怎么找：WorkBuddy 安装目录下
+
+```
+<安装目录>/resources/app.asar.unpacked/resources/extensions/edge-sync/
+├── extension.json      # id = edge-sync，service 入口 ./server/index.cjs
+├── server/index.cjs    # 31 条通道绑定都在这里；5 MB，grep 就够
+└── ui/                 # 前端产物（有界面代码，但宿主不给入口，见下）
+```
+
+它是随客户端发布的 builtin 扩展（`kind: "builtin"`、`grantedPermissions: ["*"]`、`resident`），
+没有单独安装包，随客户端升级一起换新——**不用装，也装不了**。
+
+代价是它在本机没有界面。宿主把几个 builtin 的入口硬编码排除了：
+
+```
+Vi = ['workbuddy-baas-v2', 'agent-mail', 'edge-sync']
+  → getConsumedExtensionEntryIds()
+  → selectExtensionMenuEntries: e.filter(e => e.enabled && e.ui?.entry && !excludedEntryIds.has(e.id))
+```
+
+`workbuddy://` 也没有到它的路由映射（`mapDeepLinkToRoute` 只认 `/callback/*` 和 `/task/*`），
+`ui.settings` 里的「数据导入」还被 `DeviceTaskImport` 开关 + 非 dev 构建挡着。
+所以侧栏、`+` 菜单、深链都进不去，它就是个 headless 服务（端云同步照跑）。
+
+用它只有一条路：**把 `server/index.cjs` 当参考实现读**。
+
+### 于是面板里多了一页：宿主通道
+
+读源码这件事已经做完了。侧栏面板第三个标签 **「宿主通道」** 把那 31 条列出来，点一条填参数就能调，
+返回原样打在下面——不用再开终端、也不用改代码试字段名。
+
+只放行其中 **16 条**：
+
+| 放行 | 条数 | 说明 |
+| --- | --- | --- |
+| 只读 | 8 | `list` / `listByIds` / `listPinned` / `get` / `getPendingInfo` / `listProgress` / `requests` / `requestEntries` |
+| 配置 | 8 | `configSet*` 全家：model / contextWindow / thoughtLevel / mode / permissionMode / expert / connectors / preMessageCompactPct |
+| **不放行** | 15 | `create` / `delete` / `fork` / `rename` / `move` / `pin` / `archive` / `sendPrompt` / `cancel` / `resolvePending` …… |
+
+写入类会照列，点开也有说明，但按钮是灰的：这个面板是调试台，不是遥控器。发消息用 `promptWb`，
+建会话用「+ 新建」，删和改在客户端里点更安全。
+
+参数是**位置数组**，原样透传给 daemon（`invoke(channel, ...args)`），不做字段名映射：
+
+```json
+["44444444-4444-4444-8444-444444444444", "max"]
+```
+
+模板里的 `<会话ID>` 会在顶部下拉选一个本机会话后自动替换。返回超过 200 KB 会截断并标「已截断」。
+
+命令行一样能调（走文件队列，所以 service 得在线）：
+
+```bash
+node bin/dsh2wb.mjs wb-call hostChannels
+node bin/dsh2wb.mjs wb-call hostInvoke --payload '{"channel":"wb:conversations:list","args":[]}'
+node bin/dsh2wb.mjs wb-call hostInvoke --payload '{"channel":"configSetThoughtLevel","args":["<会话ID>","max"]}'
+```
+
 ## 六个反模式
 
 1. 不做聊天输入框：`wb:message:fill` 填不进原会话，要给 `workbuddy://chat/<id>` 深链。
@@ -319,7 +420,8 @@ python test/panel_test.py     # 面板 E2E：Playwright + 假宿主，跑完把�
 ## 已知缺口
 
 * **不可移植**：`dsh-codex-ui`（宿主 UI，插件无法注入前端）、`steer` 键位、插件市场自定义索引。
-  * 例外：会话菜单那一处可以用 CDP 绕过去，已抽成 [`copy-session-id`](../copy-session-id)，
+  * 例外：会话菜单那一处可以用 CDP 绕过去，已抽成独立项目
+    [workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)，
     代价是快捷方式要带调试参数。
 * **需手动**：默认模型（`deepseek-flash` + 推理强度 max）、默认权限——**建议不要照搬 `danger-full-access`**，
   改成「工作区可写 + 审批」。

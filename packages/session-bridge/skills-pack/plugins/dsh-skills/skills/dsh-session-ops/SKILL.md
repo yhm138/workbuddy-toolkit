@@ -8,7 +8,7 @@ description: |
   不要默认用 `dsh_local` 往用户的 DSH 发消息，只有用户明确点名「DSH」「dsh_local」
   「dsh-as-mcp」时才走 MCP。不确定就先查再问，别猜。
 category: capability
-version: "2.1.0"
+version: "2.3.0"
 tags: [dsh, workbuddy, session, mcp, cross-session, clipboard, steering]
 ---
 
@@ -77,6 +77,48 @@ node bin/dsh2wb.mjs wb-call requestsWb --payload '{"conversationId":"<id>","limi
 node bin/dsh2wb.mjs bridge-test --wait 20000 --timeout 150000
 node bin/dsh2wb.mjs wb-session <会话ID>
 ```
+
+### 新建会话时指定模型 / 上下文 / 思考强度
+
+**实测结论（2026-11-05，两次重启验证）：`createWb` 只认 `cwd` 与 `model`，`contextWindow`
+和 `thoughtLevel` 会被宿主静默丢掉**（不报错、照样建会话，回查 db 两列是 `NULL`）。
+所以这三项要分两步设。
+
+第一步，建会话时把模型带上：
+
+```bash
+node bin/dsh2wb.mjs wb-call createWb --timeout 40000 --payload '{"cwd":"D:/绝对/路径","model":"deepseek-v4.1-flash"}'
+```
+
+第二步，用 `configWb` 设另外两项（走宿主 `wb:conversations:configSetContextWindow` 与
+`configSetThoughtLevel` 通道，参数形态桥内已按裸值 / `{value}` / `{<字段名>}` / `{level}`
+依次试）：
+
+```bash
+node bin/dsh2wb.mjs wb-call configWb --payload '{"conversationId":"<id>","contextWindow":1000000,"thoughtLevel":"max"}'
+```
+
+`configWb` 需要 1.2.0 之后的扩展 service（老版本会报"未知方法"），没有它就直接写 db 兜底：
+
+```bash
+python -c "import os,sqlite3;c=sqlite3.connect(os.path.expanduser('~/.workbuddy/workbuddy.db'),timeout=8);c.execute('update sessions set context_window=?,thought_level=? where id=?',(1000000,'max','<id>'));c.commit()"
+```
+
+| 字段 | 取值 | 说明 |
+| --- | --- | --- |
+| `model` | 模型 id | 必须传 id，不能传界面显示名。`deepseek-v4.1-flash` 是 DeepSeek-V4.1-Flash 的 id；传 `"DeepSeek-V4.1-Flash"` 会首轮报未知错误 |
+| `contextWindow` | 300000 / 600000 / 1000000 | 该模型 `supportedLengths` 的三档，1M 是上限 |
+| `thoughtLevel` | `low` / `high` / `max` | 界面里叫「思考强度」，`max` 就是极致；该模型 `defaultEffort` 是 `high` |
+
+三项落在 `~/.workbuddy/workbuddy.db` 的 `sessions` 表（`model`、`context_window`、
+`thought_level` 三列）。设完**必须回查**：
+
+```bash
+python -c "import os,sqlite3;db=os.path.expanduser('~/.workbuddy/workbuddy.db');c=sqlite3.connect(f'file:{db}?mode=ro',uri=True);print(c.execute('select id,model,context_window,thought_level from sessions where id=?',('<id>',)).fetchone())"
+```
+
+db 是配置的持久层，写完立刻回查能读到新值；宿主不会把 `NULL` 覆盖回来。但会话**已经在跑**时，
+当前轮次用的是启动时那份配置，新值从下一轮起生效。界面显示若与 db 不一致，在界面底部手动切一次最稳。
 
 三个必须知道的点：
 

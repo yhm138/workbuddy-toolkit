@@ -250,6 +250,50 @@
 
   #listView { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
   [hidden] { display: none !important; }
+
+  /* 宿主通道调试台：侧栏太窄，清单和表单分两屏放，不做左右分栏 */
+  #hostView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .host-note {
+    margin: 0 10px 6px; padding: 7px 9px; border-radius: 6px; font-size: 11px; line-height: 1.55;
+    color: var(--fg-dim); background: var(--bg-soft); border: 1px solid var(--line-soft);
+  }
+  .host-note b { color: var(--fg); font-weight: 600; }
+  .host-group { padding: 8px 10px 2px; font-size: 10px; letter-spacing: .04em; color: var(--fg-mute); }
+  .hrow { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+  .hrow:hover { background: var(--bg-hover); }
+  .hrow.active { background: var(--bg-active); }
+  .hrow .m { min-width: 0; flex: 1; }
+  .hrow .n { font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hrow .d { color: var(--fg-mute); font-size: 10.5px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hrow.deny .n { color: var(--fg-mute); }
+  .tag { flex: none; font-size: 9.5px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--fg-mute); margin-top: 1px; }
+  .tag.read { color: var(--ok); border-color: rgba(22,163,74,.35); }
+  .tag.config { color: var(--accent); border-color: rgba(47,111,235,.45); }
+  .tag.deny { opacity: .75; }
+
+  #hostDetail { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .host-body { flex: 1; overflow: auto; padding: 10px; }
+  .host-body .lbl { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-dim); margin: 0 0 4px; }
+  .host-body .lbl .spacer { flex: 1; }
+  .code-area {
+    width: 100%; min-height: 76px; max-height: 180px; resize: vertical;
+    border: 1px solid var(--line); border-radius: 7px; background: var(--bg-soft);
+    padding: 7px 8px; outline: none; font-family: var(--mono); font-size: 11px; line-height: 1.55;
+  }
+  .code-area:focus { border-color: rgba(47,111,235,.5); background: var(--bg); }
+  .host-body .actions { display: flex; align-items: center; gap: 6px; margin: 8px 0 10px; }
+  .host-meta { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--fg-mute); margin: 0 0 4px; min-height: 16px; }
+  .host-out {
+    margin: 0; padding: 8px 9px; border-radius: 7px; background: var(--bg-soft);
+    border: 1px solid var(--line-soft); font-family: var(--mono); font-size: 10.5px;
+    line-height: 1.55; white-space: pre-wrap; word-break: break-word; min-height: 70px;
+  }
+  .host-out.err { color: var(--err); border-color: rgba(220,38,38,.28); background: rgba(220,38,38,.05); }
+  .warnbar {
+    margin: 0 0 10px; padding: 7px 9px; border-radius: 6px; font-size: 11px; line-height: 1.55;
+    color: var(--warn); background: rgba(180,83,9,.09); border: 1px solid rgba(180,83,9,.18);
+  }
+  select.plain { border: 1px solid var(--line); background: var(--bg-soft); border-radius: 6px; padding: 2px 6px; font-size: 11px; max-width: 58%; }
 </style>
 <script>
 /* ------------------------------------------------------------------
@@ -376,6 +420,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="dsh">DSH 会话 <span class="count" id="countDsh"></span></button>
     <button class="tab" data-tab="wb">WorkBuddy <span class="count" id="countWb"></span></button>
+    <button class="tab" data-tab="host">宿主通道 <span class="count" id="countHost"></span></button>
   </nav>
 
   <section id="listView">
@@ -412,6 +457,41 @@
         <button class="btn primary" type="submit" id="btnSend">发送</button>
       </div>
     </form>
+  </section>
+
+  <section id="hostView" hidden>
+    <div class="toolbar">
+      <input class="search" id="hostSearch" placeholder="筛选通道名 / 说明" />
+    </div>
+    <div class="host-note" id="hostNote">正在读通道清单…</div>
+    <div class="list" id="hostList"></div>
+  </section>
+
+  <section id="hostDetail" hidden>
+    <div class="detail-head">
+      <button class="icon-btn" id="btnHostBack" title="返回">←</button>
+      <div class="t">
+        <div class="name mono" id="hostName"></div>
+        <div class="id" id="hostNoteLine"></div>
+      </div>
+      <span class="tag" id="hostTag"></span>
+    </div>
+    <div class="host-body">
+      <div id="hostWarn"></div>
+      <div class="lbl">
+        <span>参数 · JSON 数组，按位置透传</span>
+        <span class="spacer"></span>
+        <select class="plain" id="hostConv" hidden></select>
+      </div>
+      <textarea class="code-area" id="hostArgs" spellcheck="false"></textarea>
+      <div class="actions">
+        <button class="btn" id="btnHostTpl" type="button">填示例</button>
+        <span class="spacer"></span>
+        <button class="btn primary" id="btnHostRun" type="button">调用</button>
+      </div>
+      <div class="host-meta" id="hostMeta"></div>
+      <pre class="host-out" id="hostOut">还没调用。</pre>
+    </div>
   </section>
 
   <details class="diag" id="diag">
@@ -467,6 +547,11 @@ var state = {
   diag: [],
   ready: false,
   serviceOk: false,
+  /* 宿主通道调试台 */
+  host: [],
+  hostFilter: "",
+  hostSel: null,
+  hostConv: "",
 };
 
 try { state.style = localStorage.getItem("dsb.style") || null; } catch (e) {}
@@ -639,6 +724,7 @@ function refreshStatus() {
     appendStatus(info);
     log("status online=" + info.online + " tools=" + (info.tools || []).length + (info.error ? " err=" + info.error : ""));
     refreshInject();
+    if (state.tab === "host") return null;
     return loadHarnesses().then(function () { return loadList(); });
   });
 }
@@ -942,6 +1028,223 @@ function loadWb() {
       $("list").appendChild(box);
       log("listWb error " + e.message);
     });
+}
+
+/* ---------------- 宿主通道调试台 ----------------
+ *
+ * 这一页的定位是把 edge-sync 那份通道绑定表变成可点的调试入口。
+ * 宿主对 wb:conversations:* 的入参形状没有公开文档，猜错多半不报错、只是静默不生效，
+ * 所以这里不做字段名映射，就是「给个 JSON 数组，原样透传，把宿主原话打出来」。
+ */
+
+var HOST_TOKEN = "<会话ID>";
+var HOST_GROUPS = { "读取": "读取（只读）", "配置": "配置（configSet*）", "写入": "写入（不放行）" };
+
+function loadHostChannels(force) {
+  if (state.host.length && !force) {
+    renderHost();
+    return Promise.resolve();
+  }
+  var box = $("hostList");
+  box.innerHTML = "";
+  box.appendChild(el("div", "empty", "读通道清单…"));
+  return svc("hostChannels", {}, 15000)
+    .then(function (res) {
+      state.host = res.channels || [];
+      $("countHost").textContent = String(res.allowed || 0);
+      var note = $("hostNote");
+      note.innerHTML = "";
+      note.appendChild(el("b", null, (res.allowed || 0) + " / " + (res.total || 0) + " 放行"));
+      note.appendChild(
+        document.createTextNode(
+          "：只读和 configSet* 能直接调；会改会话内容、删会话、发消息的那几条只列出来，不放行。参数按位置透传，返回原样显示。"
+        )
+      );
+      renderHost();
+      log("hostChannels " + (res.allowed || 0) + "/" + (res.total || 0));
+    })
+    .catch(function (e) {
+      box.innerHTML = "";
+      var b = el("div", "banner");
+      b.textContent = "读不到通道清单：" + e.message + "（service 还是旧版？改完扩展要托盘退出重启客户端）";
+      box.appendChild(b);
+      log("hostChannels error " + e.message);
+    });
+}
+
+function renderHost() {
+  var box = $("hostList");
+  box.innerHTML = "";
+  var q = (state.hostFilter || "").trim().toLowerCase();
+  var rows = state.host.filter(function (c) {
+    if (!q) return true;
+    return (c.id + " " + (c.note || "") + " " + c.group).toLowerCase().indexOf(q) >= 0;
+  });
+  if (!rows.length) {
+    box.appendChild(el("div", "empty", q ? "没有匹配的通道" : "通道清单是空的"));
+    return;
+  }
+  var last = "";
+  rows.forEach(function (c) {
+    if (c.group !== last) {
+      last = c.group;
+      box.appendChild(el("div", "host-group", HOST_GROUPS[c.group] || c.group));
+    }
+    box.appendChild(hostRow(c));
+  });
+}
+
+function hostRow(c) {
+  var node = el("div", "hrow" + (c.allowed ? "" : " deny"));
+  if (state.hostSel && state.hostSel.id === c.id) node.classList.add("active");
+  var main = el("div", "m");
+  main.appendChild(el("div", "n", c.id));
+  main.appendChild(el("div", "d", c.note || ""));
+  node.appendChild(main);
+  node.appendChild(hostTag(c));
+  node.addEventListener("click", function () { openHostDetail(c); });
+  return node;
+}
+
+function hostTag(c) {
+  var node = el("span", "tag " + hostTagClass(c));
+  node.textContent = hostTagText(c);
+  return node;
+}
+
+function hostTagClass(c) {
+  return c.allow === "read" ? "read" : c.allow === "config" ? "config" : "deny";
+}
+
+function hostTagText(c) {
+  return c.allow === "read" ? "只读" : c.allow === "config" ? "配置" : "不放行";
+}
+
+function hostTemplate(c) {
+  var text = JSON.stringify(c.sample || [], null, 2);
+  return state.hostConv ? text.split(HOST_TOKEN).join(state.hostConv) : text;
+}
+
+function openHostDetail(c) {
+  state.hostSel = c;
+  $("hostView").hidden = true;
+  $("hostDetail").hidden = false;
+  $("hostName").textContent = c.id;
+  $("hostNoteLine").textContent = (c.channel || "wb:conversations:" + c.id) + (c.verified === false ? " · 参数形状未验证" : "");
+  var tag = $("hostTag");
+  tag.className = "tag " + hostTagClass(c);
+  tag.textContent = hostTagText(c);
+
+  var warn = $("hostWarn");
+  warn.innerHTML = "";
+  if (!c.allowed) {
+    var b = el("div", "warnbar");
+    b.textContent =
+      "这条不放行：" + (c.note || "") + "　要发消息用 promptWb，要建会话点右上角「新建」；删、改、批准这类操作请在客户端里点。";
+    warn.appendChild(b);
+  }
+
+  $("hostArgs").value = hostTemplate(c);
+  $("hostOut").className = "host-out";
+  $("hostOut").textContent = c.allowed ? "还没调用。" : "不放行的通道不会真的发出去。";
+  $("hostMeta").innerHTML = "";
+  $("btnHostRun").disabled = !c.allowed;
+  $("btnHostRun").textContent = "调用";
+  fillHostConv(c);
+}
+
+function fillHostConv(c) {
+  var sel = $("hostConv");
+  sel.innerHTML = "";
+  var sample = JSON.stringify(c.sample || []);
+  if (sample.indexOf(HOST_TOKEN) < 0) {
+    sel.hidden = true;
+    return;
+  }
+  sel.hidden = false;
+  sel.appendChild(new Option("选一个本机会话…", ""));
+  /* 没在 WorkBuddy 页读过列表时顺手拉一次，省得回去翻 ID */
+  if (!(state.wb || []).length && !state.hostConvLoading) {
+    state.hostConvLoading = true;
+    svc("listWb", { source: "local", page: 1, pageSize: 40 }, 25000)
+      .then(function (res) {
+        state.wb = res.conversations || [];
+        if (state.hostSel && !$("hostDetail").hidden) fillHostConv(state.hostSel);
+      })
+      .catch(function () {})
+      .then(function () { state.hostConvLoading = false; });
+  }
+  (state.wb || []).slice(0, 60).forEach(function (row) {
+    sel.appendChild(new Option(row.title ? String(row.title).slice(0, 30) : shortId(row.id), row.id));
+  });
+  if (!(state.wb || []).length) sel.appendChild(new Option("（WorkBuddy 页还没读过列表）", ""));
+  if (state.hostConv) sel.value = state.hostConv;
+}
+
+function runHostCall() {
+  var c = state.hostSel;
+  if (!c) return;
+  if (!c.allowed) {
+    toast("这条不放行");
+    return;
+  }
+  var raw = $("hostArgs").value.trim();
+  var args;
+  if (!raw) {
+    args = [];
+  } else {
+    try {
+      args = JSON.parse(raw);
+    } catch (e) {
+      toast("参数不是合法 JSON：" + e.message, 3200);
+      return;
+    }
+  }
+  if (!Array.isArray(args)) {
+    toast('参数要写成 JSON 数组，例如 ["会话ID", 1000000]', 3200);
+    return;
+  }
+
+  var btn = $("btnHostRun");
+  btn.disabled = true;
+  btn.textContent = "调用中…";
+  $("hostMeta").innerHTML = "";
+  $("hostOut").className = "host-out";
+  $("hostOut").textContent = "调用 " + c.id + " …";
+  var started = Date.now();
+
+  svc("hostInvoke", { channel: c.channel || c.id, args: args }, 90000)
+    .then(function (res) {
+      var text = typeof res.result === "string" ? res.result : JSON.stringify(res.result, null, 2);
+      $("hostOut").textContent = text || "(空返回)";
+      var meta = $("hostMeta");
+      meta.innerHTML = "";
+      meta.appendChild(
+        el("span", null, (res.ms || Date.now() - started) + " ms · " + fmtBytes(res.bytes) + (res.truncated ? " · 已截断" : ""))
+      );
+      meta.appendChild(el("span", "spacer"));
+      var cp = el("button", "chip", "复制返回");
+      cp.type = "button";
+      cp.addEventListener("click", function () { copyValue(text, "返回"); });
+      meta.appendChild(cp);
+      log("hostInvoke " + c.id + " ok " + (res.ms || 0) + "ms " + fmtBytes(res.bytes));
+    })
+    .catch(function (e) {
+      $("hostOut").className = "host-out err";
+      $("hostOut").textContent = (e.code ? "[" + e.code + "] " : "") + e.message;
+      log("hostInvoke " + c.id + " error " + e.message);
+    })
+    .then(function () {
+      btn.disabled = !c.allowed;
+      btn.textContent = "调用";
+    });
+}
+
+function fmtBytes(n) {
+  var v = Number(n) || 0;
+  if (v < 1024) return v + " B";
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + " KB";
+  return (v / 1024 / 1024).toFixed(1) + " MB";
 }
 
 function currentRows() {
@@ -1388,6 +1691,12 @@ function createWorkbuddySession(cwd, prompt) {
 $("btnRefresh").addEventListener("click", function () {
   state.current = null;
   $("detailView").hidden = true;
+  if (state.tab === "host") {
+    $("hostDetail").hidden = true;
+    $("hostView").hidden = false;
+    loadHostChannels(true);
+    return;
+  }
   $("listView").hidden = false;
   refreshStatus().catch(showFatal);
 });
@@ -1418,15 +1727,19 @@ function onTabClick(e) {
   state.tab = tab.dataset.tab;
   state.current = null;
   var isHarness = !!harnessIdOf(state.tab);
+  var isHost = state.tab === "host";
   $("composer").hidden = false;
   $("readonlyBar").hidden = true;
   $("detailView").hidden = true;
-  $("listView").hidden = false;
+  $("hostDetail").hidden = true;
+  $("hostView").hidden = !isHost;
+  $("listView").hidden = isHost;
   /* Codex / Claude 没有可用的写入通道，从这里「新建」是假的，干脆不给按钮 */
-  $("btnNew").hidden = isHarness;
+  $("btnNew").hidden = isHarness || isHost;
   $("wbSource").hidden = state.tab !== "wb";
   $("bannerHost").innerHTML = "";
-  loadList();
+  if (isHost) loadHostChannels();
+  else loadList();
 }
 
 document.querySelectorAll(".tab").forEach(function (tab) {
@@ -1463,6 +1776,31 @@ $("prompt").addEventListener("keydown", function (e) {
   }
 });
 $("btnCancel").addEventListener("click", cancelTurn);
+
+/* ---- 宿主通道页 ---- */
+$("hostSearch").addEventListener("input", function (e) {
+  state.hostFilter = e.target.value;
+  renderHost();
+});
+$("btnHostBack").addEventListener("click", function () {
+  $("hostDetail").hidden = true;
+  $("hostView").hidden = false;
+  renderHost();
+});
+$("btnHostTpl").addEventListener("click", function () {
+  if (state.hostSel) $("hostArgs").value = hostTemplate(state.hostSel);
+});
+$("btnHostRun").addEventListener("click", runHostCall);
+$("hostConv").addEventListener("change", function (e) {
+  state.hostConv = e.target.value;
+  if (state.hostSel) $("hostArgs").value = hostTemplate(state.hostSel);
+});
+$("hostArgs").addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    runHostCall();
+  }
+});
 $("newDialog").addEventListener("click", function (e) {
   if (e.target === $("newDialog")) closeNew();
 });

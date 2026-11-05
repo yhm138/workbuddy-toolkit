@@ -2,6 +2,37 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.2.0 — 2026-11-05
+
+宿主的 `wb:conversations:*` 一直只能靠读源码猜参数。这次把 edge-sync 那份绑定表搬进面板：
+第三个标签「宿主通道」列 31 条，点一条填参数就能调，返回原样打出来。
+
+### 新增
+
+- **面板「宿主通道」页**：左侧按 读取 / 配置 / 写入 分组列出 31 条通道，
+  右侧填位置参数（JSON 数组）直接透传，返回原样显示，带耗时、体积、复制按钮。
+- **`hostChannels` / `hostInvoke` 两个 service 方法**，也进了文件队列白名单，
+  命令行同样能调：`wb-call hostInvoke --payload '{"channel":"list","args":[]}'`。
+- 通道详情里可以下拉选一个本机会话，模板里的 `<会话ID>` 自动替换成真实 ID。
+
+### 取舍
+
+- 只放行 **16 条**：8 条只读 + 8 条 `configSet*`。剩下 15 条（`create` / `delete` / `fork` /
+  `rename` / `move` / `pin` / `archive` / `sendPrompt` / `cancel` / `resolvePending` …）
+  只展示不放行，按钮是灰的，点开写明原因。这个面板是调试台，不是遥控器。
+- 参数按位置透传，不做字段名映射。`configWb` 那套「四种形态依次试」留给自己用；
+  这一页是「我知道我要传什么」的场景，猜字段只会让人看不清到底传了什么。
+- 返回超过 200 KB 截断并标记，避免把整段会话正文塞进 `#hostOut`。
+
+### 修复
+
+- `test/panel_test.py` 两处断言还在比对旧的假数据 ID（`session-a1b2c3d4-0004-…`），
+  与 `test/panel.html` 里的 `session-22222222-…` 对不上，一直是红的。已对齐。
+
+### 顺带
+
+- 面板版本号跟着清单走，`extension.json` / `distribution.json` / `package.json` 同步到 1.2.0。
+
 ## 1.1.0 — 2026-10-28
 
 WorkBuddy 5.9.x 起，客户端升级会**整体替换 `resources/`**，装在那儿的 bundled 扩展跟着被清掉。
@@ -93,7 +124,7 @@ WorkBuddy 5.9.x 起，客户端升级会**整体替换 `resources/`**，装在�
 
 **会话菜单注入「复制 Session ID」**
 
-> 这部分已抽成工具集里的 [`copy-session-id`](../copy-session-id)
+> 这部分已抽成独立项目：[workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)
 
 - 会话右键菜单补一项「复制 Session ID」，复制完整 UUID
 - 借宿主留给自动化测试的 CDP 调试端口，在渲染进程里补 DOM 节点

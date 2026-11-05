@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { copyDir, ensureDir, readJson, timestamp } from '../core/fsx.mjs';
 import { extensionsDir, findRoot } from '../core/wb.mjs';
@@ -45,9 +46,16 @@ export function installExtension(options = {}) {
 
   ensureDir(extRoot);
   if (fs.existsSync(target)) {
-    const backup = `${target}.bak-${timestamp()}`;
-    copyDir(target, backup);
-    console.log(`  已备份旧版本 → ${backup}`);
+    // 备份必须放在扩展目录之外：宿主按「目录名 == 清单里的 id」校验，
+    // dsh-session-bridge.bak-20261103 这种名字会被当非法扩展扫，每次启动都刷错误。
+    const backup = path.join(os.homedir(), '.workbuddy', 'dsh-skills', 'backups', `extension-${timestamp()}`);
+    try {
+      ensureDir(path.dirname(backup));
+      copyDir(target, backup);
+      console.log(`  已备份旧版本 → ${backup}`);
+    } catch (error) {
+      console.log(`  旧版本没备份（${error.message}），继续安装`);
+    }
   }
 
   copyDir(source, target);

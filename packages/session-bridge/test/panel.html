@@ -106,7 +106,7 @@
       reply(port, d.requestId, {
         fallbackToken: "fake-token-" + Date.now(),
         fallbackExpiresAt: Date.now() + 300000,
-        methods: ["ping", "status", "listDsh", "listWb", "messagesDsh", "promptDsh", "cancelDsh", "createDsh", "createWb", "promptWb", "requestsWb", "readWbLocal", "harnesses", "listHarness", "readHarness", "revealPath", "copyText", "menuInject"]
+        methods: ["ping", "status", "listDsh", "listWb", "messagesDsh", "promptDsh", "cancelDsh", "createDsh", "createWb", "promptWb", "requestsWb", "readWbLocal", "harnesses", "listHarness", "readHarness", "revealPath", "copyText", "menuInject", "hostChannels", "hostInvoke"]
       });
       return;
     }
@@ -212,6 +212,30 @@
             injected: 1,
             running: true,
             lastError: "",
+          });
+        // 宿主通道调试台：形状照真 service 的 hostChannels 返回，够验渲染与透传即可
+        case "hostChannels":
+          return reply(port, d.requestId, {
+            ok: true,
+            total: 3,
+            allowed: 2,
+            prefix: "wb:conversations:",
+            channels: [
+              { id: "list", channel: "wb:conversations:list", group: "读取", allow: "read", allowed: true, verified: true, sample: [], note: "列出本机会话" },
+              { id: "configSetThoughtLevel", channel: "wb:conversations:configSetThoughtLevel", group: "配置", allow: "config", allowed: true, verified: true, sample: ["<会话ID>", "max"], note: "思考强度 low / high / max" },
+              { id: "delete", channel: "wb:conversations:delete", group: "写入", allow: "deny", allowed: false, note: "删会话" }
+            ]
+          });
+        case "hostInvoke":
+          window.__HOST_CALL__ = { channel: payload.channel, args: payload.args };
+          return reply(port, d.requestId, {
+            ok: true,
+            channel: payload.channel,
+            args: payload.args,
+            ms: 3,
+            result: { total: 1, items: [{ id: "conv-1", title: "示例会话" }] },
+            truncated: false,
+            bytes: 54
           });
         default:
           return fail(port, d.requestId, "未知方法 " + method, "NO_METHOD");
