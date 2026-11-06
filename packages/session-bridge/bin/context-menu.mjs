@@ -8,17 +8,22 @@
  * 所以 .cmd 只留纯 ASCII 的转发，中文输出交给 Node —— Node 在 TTY 下走
  * WriteConsoleW，跟代码页无关，稳定不乱码。
  *
- * 端口怎么给客户端：**写进快捷方式的启动参数**。
+ * 端口怎么给客户端：**优先写进用户桌面快捷方式的启动参数**。
  *
- * 之前试过环境变量（WORKBUDDY_REMOTE_DEBUGGING_PORT），不可靠：宿主是在 JS 启动
- * 流程里 `app.commandLine.appendSwitch('remote-debugging-port', ...)`，这个时机
- * 晚于 Chromium 建立调试服务器，实测同样的环境变量上一次生效、下一次就只剩
- * 「子进程命令行里有、浏览器主进程没绑端口」。启动参数在进程创建时就定了，
- * 没有这个竞态。
+ * 系统级快捷方式（Public\Desktop、ProgramData\Start Menu）普通用户改不动，而且
+ * 客户端整包升级会把它们整个重装、参数被抹掉。以前这时只能退回环境变量
+ * WORKBUDDY_REMOTE_DEBUGGING_PORT，但宿主是在 JS 启动流程里
+ * `app.commandLine.appendSwitch('remote-debugging-port', ...)`，这个时机晚于
+ * Chromium 建立调试服务器：实测主进程不绑端口，只有后 fork 的 renderer 命令行里
+ * 带着参数（2026-11-06 又复现一次）。启动参数在进程创建时就定了，没有竞态。
+ * 用户自己桌面那份普通权限可写，升级也不会动它，所以 enable 会确保它存在。
+ *
+ * service 是 daemon fork 的，拿不到用户级环境变量；它靠
+ * ~/.workbuddy/dsh-skills/menu-inject.json 这份文件知道端口。
  *
  * 用法：
- *   node bin/context-menu.mjs enable [port]   改快捷方式 + 写配置（默认 9333）
- *   node bin/context-menu.mjs disable         还原快捷方式 + 清配置
+ *   node bin/context-menu.mjs enable [port]   写快捷方式 + 配置（默认 9333）
+ *   node bin/context-menu.mjs disable         还原并清配置
  *   node bin/context-menu.mjs launch [port]   只给这次启动带上，不动快捷方式
  *   node bin/context-menu.mjs status          看当前状态
  */
@@ -28,7 +33,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyToShortcuts, restoreShortcuts, shortcutsWithArgs, debugArgs } from "./shortcut.mjs";
+import { applyToShortcuts, restoreShortcuts, shortcutsWithArgs, debugArgs, ensureUserShortcut, removeUserShortcut, userShortcutFile, readLink } from "./shortcut.mjs";
 
 export const VAR = "WORKBUDDY_REMOTE_DEBUGGING_PORT";
 export const DEFAULT_PORT = 9333;
@@ -38,7 +43,7 @@ export const DEFAULT_PORT = 9333;
  *
  * 实测：宿主的扩展 service 是 daemon 进程 fork 的，**拿不到用户级环境变量**
  * （客户端主进程拿到了 9222，service 里 process.env 是空的）。所以「复制 Session ID」
- * 一直显示未启用。环境变量负责让客户端开端口，这份文件负责告诉 service 端口是多少。
+ * 一直显示未启用。启动参数 / 环境变量负责让客户端开端口，这份文件负责告诉 service 端口是多少。
  */
 export function configPath() {
   const home = process.env.WORKBUDDY_HOME || path.join(os.homedir(), ".workbuddy");
@@ -226,16 +231,12 @@ function banner() {
   hr();
 }
 
-function nextStep(how = "shortcut") {
+function nextStep() {
   console.log("");
   console.log(C.warn("  下一步：右下角托盘图标右键 → 退出，然后**从桌面图标重新打开**。"));
-  console.log(
-    C.dim(
-      how === "env"
-        ? "  端口靠环境变量开，启动时由宿主自己读；客户端是单例，正在跑的进程改不了。"
-        : "  快捷方式已经带上启动参数了；客户端是单例，正在跑的进程改不了。"
-    )
-  );
+  console.log(C.dim("  优先用桌面上那个「WorkBuddy (Session ID)」：它带启动参数，"));
+  console.log(C.dim("  进程创建时就定了端口，不依赖宿主那次有竞态的 appendSwitch。"));
+  console.log(C.dim("  客户端是单例，正在跑的进程改不了命令行。"));
 }
 
 function securityNote() {
@@ -261,7 +262,7 @@ async function cmdEnable(port) {
     return 1;
   }
 
-  console.log("[1/3] 快捷方式（客户端靠启动参数开端口）");
+  console.log("[1/4] 系统级快捷方式（客户端升级会重装，普通权限常改不动）");
   const applied = applyToShortcuts(port);
   if (!applied.changed.length && !applied.failed.length) {
     console.log(C.warn("      没找到可改的 WorkBuddy 快捷方式。"));
@@ -286,7 +287,18 @@ async function cmdEnable(port) {
   if (applied.backup) console.log(C.dim(`      原文件备份在 ${applied.backup}`));
 
   console.log("");
-  console.log("[2/3] 配置文件（service 靠它知道端口）");
+  console.log("[2/4] 用户桌面快捷方式（关键：升级抹不掉、普通权限可写）");
+  const own = ensureUserShortcut(port, findExe());
+  if (own.ok) {
+    console.log(C.ok(`      [ok] ${own.file}`));
+    console.log(C.dim(`           ${own.args}`));
+    if (!own.changed) console.log(C.dim("           已存在且参数正确，没改动"));
+  } else {
+    console.log(C.bad(`      [x] ${own.reason}`));
+  }
+
+  console.log("");
+  console.log("[3/4] 配置文件（service 靠它知道端口）");
   try {
     const file = writeConfig(port);
     console.log(C.ok(`      [ok] ${file}`));
@@ -296,34 +308,17 @@ async function cmdEnable(port) {
   }
 
   console.log("");
-  console.log("[3/3] 环境变量（快捷方式改不动时靠它开端口）");
+  console.log("[4/4] 环境变量（兜底，端口与启动参数保持一致）");
 
-  // 只有「所有快捷方式都改成功」才敢清环境变量。否则清完就一个开端口的途径都不剩：
-  // 参数没写进去、变量又被删了，客户端重启后端口直接消失（2026-10-25 踩过）。
-  const shortcutReady = applied.changed.length > 0 && applied.failed.length === 0;
-  const env = readUserEnv();
-
-  if (shortcutReady) {
-    if (env.value === null && !env.unknown) {
-      console.log(C.dim("      本来就没设置，保持干净。"));
-    } else if (env.unknown) {
-      console.log(C.dim("      读不到注册表，跳过。若之前设过，请手动删掉 " + VAR + "。"));
-    } else {
-      const cleared = clearUserEnv();
-      console.log(cleared.ok ? C.ok("      [ok] 已删除 " + VAR) : C.bad("      [x] 删除失败，请手动移除 " + VAR));
-      console.log(C.dim("      快捷方式已带参数；留着这个变量会被宿主 appendSwitch 反覆盖。"));
-    }
+  // 不再清掉它。宿主 appendSwitch 有竞态，但多一条路不是坏事；关键是端口必须和
+  // 启动参数一致，否则同名的 switch 会把启动参数反覆盖成旧端口（2026-10-25 踩过）。
+  const set = setUserEnv(port);
+  if (set.ok) {
+    console.log(C.ok(`      [ok] ${VAR}=${port}`));
+    console.log(C.dim("      与桌面快捷方式的端口相同，不会反覆盖；从别的入口启动时也多一次机会。"));
   } else {
-    const set = setUserEnv(port);
-    if (set.ok) {
-      console.log(C.ok(`      [ok] 改用环境变量兜底：${VAR}=${port}`));
-      console.log(C.dim("      快捷方式没改成（要在 Public\\Desktop / ProgramData 下写文件，得管理员），"));
-      console.log(C.dim("      但宿主主进程会读这个变量，效果和启动参数一样。"));
-      console.log(C.dim("      以后拿到管理员权限改了快捷方式，重跑一次 enable 会自动清掉它。"));
-    } else {
-      console.log(C.bad(`      [x] 写环境变量也失败：${set.detail || "未知原因"}`));
-      console.log(C.dim(`      手动设：setx ${VAR} ${port}`));
-    }
+    console.log(C.bad(`      [x] 写环境变量失败：${set.detail || "未知原因"}`));
+    console.log(C.dim(`      不影响桌面快捷方式那条路；想补可手动 setx ${VAR} ${port}`));
   }
 
   if (probe.open && probe.ours) {
@@ -331,17 +326,18 @@ async function cmdEnable(port) {
     console.log(C.ok(`      [i] 端口 ${port} 现在开着，是当前进程的，这次不用重启。`));
     console.log(C.dim("      下次启动会自动带上。"));
   } else {
-    nextStep(shortcutReady ? "shortcut" : "env");
+    nextStep();
   }
   securityNote();
-  return applied.failed.length ? 1 : 0;
+  // 系统级快捷方式改不动不算失败：用户桌面那份已经是可靠入口了
+  return own.ok || applied.failed.length === 0 ? 0 : 1;
 }
 
 async function cmdDisable() {
   banner();
   const cfgPort = readConfigPort();
 
-  console.log("[1/3] 还原快捷方式");
+  console.log("[1/4] 还原系统级快捷方式");
   const back = restoreShortcuts();
   if (!back.restored.length) {
     console.log(C.dim(`      ${back.reason || "没有可还原的文件"}`));
@@ -351,12 +347,17 @@ async function cmdDisable() {
   }
 
   console.log("");
-  console.log("[2/3] 删配置文件");
+  console.log("[2/4] 删掉桌面上带调试参数的那个图标");
+  const own = removeUserShortcut();
+  console.log(own.ok && own.removed ? C.ok(`      [ok] ${own.file}`) : C.dim("      本来就没有"));
+
+  console.log("");
+  console.log("[3/4] 删配置文件");
   const removedCfg = clearConfig();
   console.log(removedCfg ? C.ok("      [ok] 已删除") : C.dim("      本来就没有"));
 
   console.log("");
-  console.log("[3/3] 清环境变量");
+  console.log("[4/4] 清环境变量");
   const env = readUserEnv();
   if (env.value === null && !env.unknown) {
     console.log(C.dim("      本来就没设置。"));
@@ -412,8 +413,23 @@ async function cmdStatus(port) {
   if (cfgPort) mark(true, `${configPath()} → ${cfgPort}`);
   else mark(false, `${configPath()} 不存在或未启用`);
 
-  console.log("  快捷方式（客户端读的是这个）");
-  const rows = shortcutsWithArgs();
+  console.log("  用户桌面启动入口（可靠：普通权限可写，升级抹不掉）");
+  const ownFile = userShortcutFile();
+  let ownOk = false;
+  let ownArgs = "";
+  try {
+    if (fs.existsSync(ownFile)) {
+      ownArgs = readLink(ownFile).args || "";
+      ownOk = /--remote-debugging-port=\d+/.test(ownArgs);
+    }
+  } catch {
+    /* 文件坏了就当没有 */
+  }
+  mark(ownOk, ownOk ? `${ownFile} → ${ownArgs}` : `${ownFile} 不存在或没带调试参数`);
+
+  console.log("  系统级快捷方式（客户端升级会重装、普通权限常改不动）");
+  const ownKey = path.resolve(userShortcutFile()).toLowerCase();
+  const rows = shortcutsWithArgs().filter((row) => path.resolve(row.file).toLowerCase() !== ownKey);
   if (!rows.length) {
     console.log(C.warn("       没找到 WorkBuddy 快捷方式"));
   }
@@ -433,11 +449,11 @@ async function cmdStatus(port) {
   const shortcutHasPort = rows.some((row) => !row.error && /--remote-debugging-port=\d+/.test(row.args || ""));
   if (env.unknown) console.log(C.warn("       读不到（reg 与 powershell 都被拦）"));
   else if (env.value) {
-    console.log(
-      shortcutHasPort
-        ? C.warn(`       ${VAR}=${env.value}（和快捷方式参数重复，建议删掉一个）`)
-        : C.ok(`       ${VAR}=${env.value}（兜底方式，靠它开端口）`)
-    );
+    const wantPort = cfgPort || port;
+    const same = env.value === String(wantPort);
+    console.log(same
+      ? C.ok(`       ${VAR}=${env.value}（与启动参数同端口，作为兜底保留）`)
+      : C.warn(`       ${VAR}=${env.value} ≠ 启动参数 ${wantPort}，宿主会反覆盖成它，重跑 enable 同步`));
   } else console.log(C.dim(`       ${VAR} 未设置`));
 
   console.log("  客户端 / 端口");
@@ -460,13 +476,13 @@ async function cmdStatus(port) {
     console.log(C.dim(`  结论：端口 ${usePort} 被别人占了，换个端口重跑 enable ${usePort + 1}。`));
   } else if (probe.open && probe.ours) {
     console.log(C.dim("  结论：链路已就绪。注入要 service 在线，点开一次侧栏「会话桥」面板即可。"));
-  } else if (env.value) {
-    console.log(C.dim(`  结论：端口没开，但环境变量已设 ${env.value} —— 这个进程是设它之前启动的，托盘退出重开即可。`));
-  } else if (shortcutHasPort) {
-    console.log(C.dim("  结论：参数已写进快捷方式，但当前这个进程没带 —— 退出后从桌面图标重开。"));
+  } else if (env.value || shortcutHasPort || ownOk) {
+    console.log(C.dim("  结论：端口没开 —— 当前进程不是带参数启动的（或环境变量那次 appendSwitch 没赶上）。"));
+    console.log(C.dim(ownOk
+      ? "  托盘退出后，从桌面的「WorkBuddy (Session ID)」图标重开：进程创建时就带参数。"
+      : "  先跑一次 enable 生成桌面图标，再托盘退出、从它重开。"));
   } else {
-    console.log(C.dim("  结论：快捷方式没参数、环境变量也没设，客户端启动时开不了端口。"));
-    console.log(C.dim("  跑 bin\\enable-context-menu.cmd —— 快捷方式需要管理员时会自动改用环境变量兜底。"));
+    console.log(C.dim("  结论：没有任何开端口的途径。跑 bin\\enable-context-menu.cmd。"));
   }
   return 0;
 }

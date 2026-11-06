@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLink, parseLink, debugArgs, stripDebugArgs } from "../bin/shortcut.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  buildLink,
+  parseLink,
+  debugArgs,
+  stripDebugArgs,
+  ensureUserShortcut,
+  removeUserShortcut,
+  userShortcutFile,
+} from "../bin/shortcut.mjs";
 
 /**
  * .lnk 是我们自己拼字节拼出来的（沙箱禁了 COM），所以「写进去能不能读回来」
@@ -79,4 +90,104 @@ test("换端口时不会把旧端口留在参数里", () => {
   assert.equal(twice.match(/--remote-debugging-port=/g).length, 1);
   assert.match(twice, /9444/);
   assert.doesNotMatch(twice, /9333/);
+});
+
+/* ---------------- 用户桌面快捷方式（绕开环境变量竞态的那条路） ---------------- */
+
+function tempDesktop() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "dsh-lnk-"));
+}
+
+test("用户桌面快捷方式：写进去能读回目标、参数、工作目录", () => {
+  const dir = tempDesktop();
+  try {
+    const r = ensureUserShortcut(9333, TARGET, dir);
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.created, true);
+    assert.equal(r.changed, true);
+
+    const back = parseLink(fs.readFileSync(r.file));
+    assert.equal(back.target, TARGET);
+    assert.equal(back.args, debugArgs(9333));
+    assert.equal(back.workDir, WORKDIR);
+    assert.equal(back.iconLocation, TARGET, "没写图标位置的话桌面上会是个白板");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("重复跑不重写：已存在且参数一致时原样返回", () => {
+  const dir = tempDesktop();
+  try {
+    const first = ensureUserShortcut(9333, TARGET, dir);
+    const bytes = fs.readFileSync(first.file);
+    const second = ensureUserShortcut(9333, TARGET, dir);
+    assert.equal(second.ok, true);
+    assert.equal(second.changed, false);
+    assert.equal(second.created, false);
+    assert.deepEqual(fs.readFileSync(second.file), bytes);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("换端口会重写，旧端口一个字都不留", () => {
+  const dir = tempDesktop();
+  try {
+    ensureUserShortcut(9333, TARGET, dir);
+    const r = ensureUserShortcut(9444, TARGET, dir);
+    assert.equal(r.changed, true);
+    const args = parseLink(fs.readFileSync(r.file)).args;
+    assert.match(args, /--remote-debugging-port=9444/);
+    assert.doesNotMatch(args, /9333/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("已有自定义参数时不覆盖用户自己的东西", () => {
+  const dir = tempDesktop();
+  try {
+    const file = userShortcutFile(dir);
+    const original = buildLink({ target: TARGET, args: '--user-data-dir="D:\\x y"', workDir: WORKDIR });
+    fs.writeFileSync(file, original);
+
+    const r = ensureUserShortcut(9333, TARGET, dir);
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /自定义参数/);
+    assert.deepEqual(fs.readFileSync(file), original);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("非法端口不落文件", () => {
+  const dir = tempDesktop();
+  try {
+    for (const bad of [0, -1, 65536, "9333", null]) {
+      assert.equal(ensureUserShortcut(bad, TARGET, dir).ok, false);
+    }
+    assert.equal(fs.existsSync(userShortcutFile(dir)), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("removeUserShortcut 能收掉桌面图标，重复删不报错", () => {
+  const dir = tempDesktop();
+  try {
+    ensureUserShortcut(9333, TARGET, dir);
+    assert.equal(removeUserShortcut(dir).removed, true);
+    assert.equal(fs.existsSync(userShortcutFile(dir)), false);
+    assert.equal(removeUserShortcut(dir).removed, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("默认落在用户自己的 Desktop，不是改不动的 Public", () => {
+  const file = userShortcutFile();
+  assert.match(file, /Desktop/);
+  assert.doesNotMatch(file, /Users\\Public|ProgramData/);
+  assert.match(file, /Session ID/);
 });

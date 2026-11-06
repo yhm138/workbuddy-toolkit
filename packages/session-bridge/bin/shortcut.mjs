@@ -248,6 +248,76 @@ export function debugArgs(port) {
   return `--remote-debugging-port=${port} --remote-allow-origins=${origins}`;
 }
 
+/** 指向用户自己桌面的那份快捷方式。普通权限可写，客户端升级不会动它。dir 供测试注入。 */
+export function userShortcutFile(dir) {
+  const desktop = dir || process.env.WORKBUDDY_DESKTOP || path.join(os.homedir(), "Desktop");
+  return path.join(desktop, "WorkBuddy (Session ID).lnk");
+}
+
+/** 从已有快捷方式里借一个 exe 路径，避免再写一份安装目录探测。 */
+function existingTarget() {
+  for (const row of shortcutsWithArgs()) {
+    if (!row.error && row.target && /\.exe$/i.test(row.target)) return row.target;
+  }
+  return "";
+}
+
+/**
+ * 在用户桌面放一份带调试参数的快捷方式。
+ *
+ * 为什么必须这么干：客户端整包升级会重装 Public\Desktop 与 ProgramData 下的
+ * 快捷方式，参数被抹掉；这两处普通用户改不动（EPERM），于是只能退回环境变量，
+ * 而宿主是在 JS 启动流程里 appendSwitch('remote-debugging-port')，时机晚于
+ * Chromium 建立调试服务器——实测主进程不绑端口、只有后 fork 的 renderer
+ * 带着参数（2026-11-06 复现）。启动参数在进程创建时就定了，没有这个竞态。
+ *
+ * 返回 { ok, file, args, created, changed }；失败时也带 reason，不抛。
+ */
+export function ensureUserShortcut(port, exe, dir) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, reason: "端口不合法" };
+  const target = exe || existingTarget();
+  if (!target) return { ok: false, reason: "找不到 WorkBuddy.exe，可用 WORKBUDDY_EXE 指定" };
+
+  const file = userShortcutFile(dir);
+  const args = debugArgs(port);
+  const workDir = path.dirname(target);
+  try {
+    let created = false;
+    if (fs.existsSync(file)) {
+      const cur = readLink(file);
+      // 有非调试参数时不覆盖，免得抹掉用户自己加的东西
+      if (stripDebugArgs(cur.args)) return { ok: false, file, reason: "已有自定义参数，未改动" };
+      if (cur.target === target && cur.args.trim() === args.trim() && cur.iconLocation === target) {
+        return { ok: true, file, args, created, changed: false };
+      }
+    } else created = true;
+
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // iconLocation 不写的话桌面会是个白板图标，点得开但难认
+    const bytes = buildLink({ target, args, workDir, name: "WorkBuddy (Session ID)", iconLocation: target });
+    fs.writeFileSync(file, bytes);
+    const check = readLink(file);
+    if (check.target !== target || check.args !== args || check.iconLocation !== target) {
+      throw new Error(`回读不一致（target=${check.target} args=${check.args} icon=${check.iconLocation}）`);
+    }
+    return { ok: true, file, args, created, changed: true };
+  } catch (error) {
+    return { ok: false, file, reason: error.message };
+  }
+}
+
+/** 停用注入时把桌面那份也收掉：留着它，点一下又会把调试端口打开。 */
+export function removeUserShortcut(dir) {
+  const file = userShortcutFile(dir);
+  try {
+    const existed = fs.existsSync(file);
+    fs.rmSync(file, { force: true });
+    return { ok: true, file, removed: existed };
+  } catch (error) {
+    return { ok: false, file, reason: error.message };
+  }
+}
+
 /** 把旧的调试参数摘掉，换成新的。 */
 export function stripDebugArgs(args) {
   return String(args || "")

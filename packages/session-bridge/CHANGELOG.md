@@ -2,6 +2,23 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## Unreleased
+
+### 修复
+
+- **客户端升级后「复制 Session ID」失效**：5.9.x 整包升级会重装
+  `Public\Desktop` / `ProgramData` 下的快捷方式，调试参数被抹掉；这两处普通权限又
+  改不动（`EPERM`），只剩 `WORKBUDDY_REMOTE_DEBUGGING_PORT` 环境变量。而它走的是
+  宿主 JS 里的 `appendSwitch`，时机晚于 Chromium 建立调试服务器——实测主进程不绑
+  端口，只有后 fork 的 renderer 子进程命令行里带着参数（2026-11-06 复现）。
+  `enable` 现在会在**用户自己的桌面**新建一份带参数的
+  `WorkBuddy (Session ID).lnk`（普通权限可写、升级抹不掉），`disable` 会收掉它；
+  环境变量改为同步成同一个端口并保留，不再清掉。`status` 单独显示这个入口。
+- `status` 把桌面图标误列进「系统级快捷方式」，以及「环境变量重复，建议删一个」
+  这句与新策略矛盾的提示，一并修掉。
+- 新增 7 例用户桌面快捷方式测试（写进去能读回、重复跑不重写、换端口不留旧值、
+  自定义参数不覆盖、非法端口不落文件、能删、默认路径不在 Public），全量 77 例。
+
 ## 1.2.0 — 2026-11-05
 
 宿主的 `wb:conversations:*` 一直只能靠读源码猜参数。这次把 edge-sync 那份绑定表搬进面板：
@@ -124,7 +141,7 @@ WorkBuddy 5.9.x 起，客户端升级会**整体替换 `resources/`**，装在�
 
 **会话菜单注入「复制 Session ID」**
 
-> 这部分已抽成独立项目：[workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)
+> 这部分在工具集里是 [`packages/copy-session-id`](https://github.com/yhm138/workbuddy-toolkit/tree/main/packages/copy-session-id)。
 
 - 会话右键菜单补一项「复制 Session ID」，复制完整 UUID
 - 借宿主留给自动化测试的 CDP 调试端口，在渲染进程里补 DOM 节点
@@ -154,7 +171,7 @@ WorkBuddy 5.9.x 起，客户端升级会**整体替换 `resources/`**，装在�
   **不 reject**，而是 resolve `{__wbError:true, code:4001}`，`try/catch` 永远进不去，
   后面两条兜底从未执行
 - **关了客户端再打开，菜单项就没了**：`enable` 无条件清环境变量，而快捷方式因
-  `EPERM` 没改成，等于把开端口的途径全删了。现在只有全部改成功才清
+  `EPERM` 没改成，等于把开端口的途径全删了。1.0.0 起改成只有全部改成功才清
 - **注入项要 700~1400ms 才出现**：「克隆体子节点数 > 8 就放弃」的守卫把正常条目
   也挡掉了，改用 `role="menuitem"` 判容器后降到 120ms
 - **右键后客户端卡死**：早期用全局 MutationObserver + 把菜单容器当行容器克隆，

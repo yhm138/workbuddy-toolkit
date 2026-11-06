@@ -63,44 +63,37 @@ Chromium 的调试服务器在主进程初始化时就已经读完命令行参�
 
 ## 三、怎么开
 
-### 方式一：跑一次 enable（它会自己挑能走通的那条路）
+### 方式一：跑一次 enable（推荐）
 
 ```bat
 bin\enable-context-menu.cmd
 ```
 
-它会动**三处**：
+它会动**四处**：
 
 | 动哪里 | 给谁看 | 作用 |
 |---|---|---|
-| 快捷方式的启动参数 `--remote-debugging-port=9333` | 客户端 | 启动时就把 CDP 端口绑上，没有竞态 |
+| **用户桌面的 `WorkBuddy (Session ID).lnk`** | 客户端 | 新建一份带 `--remote-debugging-port=9333` 的启动图标。普通权限可写、客户端升级不会动它 |
+| 系统级快捷方式的启动参数 | 客户端 | 尽力改；这两处常被 `EPERM` 挡住，改不动不影响上面的图标 |
 | `~/.workbuddy/dsh-skills/menu-inject.json` | 会话桥 service | 告诉它去连哪个端口 |
-| `HKCU\Environment\WORKBUDDY_REMOTE_DEBUGGING_PORT` | 客户端 | 兜底：快捷方式改不动时靠它开端口 |
+| `HKCU\Environment\WORKBUDDY_REMOTE_DEBUGGING_PORT` | 客户端 | 兜底，端口与图标保持一致 |
 
-**开端口有两条路，二选一，绝不能同时留**：
+**为什么关键是用户桌面那份**：系统级快捷方式在 `C:\Users\Public\Desktop` 和
+`C:\ProgramData\Microsoft\Windows\Start Menu\Programs` 下，普通权限改不动（`EPERM`）；
+而且客户端整包升级会把它们整个重装、参数被抹掉。以前这时只剩环境变量兜底，
+可它走的是 `appendSwitch` 竞态——实测主进程不绑端口、只有 renderer 子进程带参数
+（2026-11-06 又复现一次）。启动参数在进程创建时就定了，没有竞态；用户桌面那份
+普通权限可写、升级也不会动它。
 
-1. **快捷方式参数**（首选）。WorkBuddy 的快捷方式在 `C:\Users\Public\Desktop` 和
-   `C:\ProgramData\Microsoft\Windows\Start Menu\Programs` 下，普通权限改不了（`EPERM`），
-   得**右键 `enable-context-menu.cmd` → 以管理员身份运行**。
-2. **环境变量兜底**（不需要管理员）。宿主主进程启动时会读
-   `WORKBUDDY_REMOTE_DEBUGGING_PORT` 再 `appendSwitch`，效果和启动参数一样。
-   代价是对所有启动方式都生效，不能只针对某个快捷方式。
+环境变量**不再清掉**，改成同步成同一个端口：多一条路不是坏事，端口一致就不会被
+`appendSwitch` 反覆盖。旧版「两条路二选一、绝不能同时留」的结论只在端口不同时成立。
 
-`enable` 的判断：
+改系统级快捷方式之前会原样备份到 `~/.workbuddy/dsh-skills/backups/shortcuts/<时间戳>/`。
 
-- 所有快捷方式都改成功 → 走参数，**顺手清掉环境变量**（留着会被 `appendSwitch` 反覆盖）。
-- 有任何快捷方式改不动 → 走环境变量兜底，并明确告诉你走的是哪条。
+写完**从托盘退出 WorkBuddy，然后双击桌面上那个「WorkBuddy (Session ID)」图标重开**——
+正在跑的进程改不了启动参数，从别的入口启动就又回到竞态那条路了。
 
-> **这里踩过一个坑**：旧版 `enable` 不管快捷方式改没改成就把环境变量删掉。
-> 在没有管理员权限的机器上，于是「参数没写进去 + 变量被删掉了」——三条路一起断，
-> 客户端重启后端口直接消失、菜单项也跟着没了（2026-10-25 实见）。
-> 现在这条约束写死在代码里：**只有 `changed.length > 0 && failed.length === 0` 才清变量。**
-
-改快捷方式之前会原样备份到 `~/.workbuddy/dsh-skills/backups/shortcuts/<时间戳>/`。
-
-写完**从托盘退出 WorkBuddy，再重新打开**——正在跑的进程改不了启动参数。
-
-关掉（会自动还原快捷方式）：
+关掉（会还原系统级快捷方式、删掉桌面图标、清配置与环境变量）：
 
 ```bat
 bin\disable-context-menu.cmd
@@ -130,8 +123,8 @@ bin\launch-with-copy-id.cmd
 setx WORKBUDDY_REMOTE_DEBUGGING_PORT 9333
 ```
 
-两种都要托盘退出重开才生效。**别同时用**：宿主会 `appendSwitch` 环境变量里的值，
-把快捷方式参数盖掉，之后就分不清端口到底是谁开的了。
+两种都要托盘退出重开才生效。环境变量那条有竞态，优先用启动参数；
+真要两个都留，端口必须一致（跑 `enable` 会自动同步）。
 
 ### 先看看现在是什么状态
 
@@ -255,8 +248,8 @@ WorkBuddy 主进程（带 --remote-debugging-port=9333）
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 徽标一直没有 | 配置文件没写 | `node bin\context-menu.mjs status` 先看「配置文件」那一行；没有就重跑 enable |
-| **面板一直显示「等主窗口…（ECONNREFUSED 127.0.0.1:9333）」** | 客户端启动时没开调试端口：快捷方式没参数、环境变量又被删了 | 跑 `status` 看「快捷方式 / 环境变量」两段；两条路都空就重跑 enable（会自动落到环境变量兜底），然后托盘退出重开 |
-| 重启后菜单项消失 | 同上，端口没开 → 注入器连不上 | 同上；现在 enable 不会再制造这个状态 |
+| **面板一直显示「等主窗口…（ECONNREFUSED 127.0.0.1:9333）」** | 客户端启动时没绑上调试端口。最常见的是客户端升级抹掉了系统级快捷方式参数，只剩有竞态的环境变量 | `node bin\context-menu.mjs status` 看「用户桌面启动入口」；重跑一次 enable 生成桌面图标，托盘退出后**从桌面那个图标**重开 |
+| 重启后菜单项消失 | 同上，端口没开 → 注入器连不上 | 同上；桌面图标不会被升级抹掉，认准它启动即可 |
 | **改了代码、也重启了，行为一点没变** | 只改了仓库，没 `install-extension`；service 读的是安装副本 | 跑 `install-extension`，再托盘退出重开。核对副本 `mtime` 和内容（见上一节） |
 | 菜单里没有这一项，徽标却是 `✓` | 注入发生在页面重载之前 | 重开一次客户端；或重新右键一次会话（注入脚本按需触发） |
 | 徽标显示 `…` | 端口开了但 service 没连上 | 先跑 `node bin\context-menu.mjs status` 看端口是不是被别的程序占了；再看日志的「但不是 WorkBuddy」 |
