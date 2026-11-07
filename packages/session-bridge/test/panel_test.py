@@ -110,9 +110,13 @@ def main() -> int:
         if revealed != "C:\\Users\\me\\Documents\\demo-workspace":
             failures.append(f"revealPath 路径不对：{revealed}")
 
-        # 详情 + 消息
+        # 详情 + 消息（loadMessages 是异步的，先等第一条渲染出来再数）
         rows.nth(1).locator(".main").click()
         frame.locator("#detailView").wait_for(state="visible", timeout=5000)
+        try:
+            frame.locator(".msg").first.wait_for(timeout=8000)
+        except Exception:
+            pass
         msg_count = frame.locator(".msg").count()
         if msg_count != 2:
             failures.append(f"详情消息应为 2 条，实际 {msg_count}")
@@ -173,6 +177,43 @@ def main() -> int:
         frame.locator('#wbSource button[data-src="local"]').click()
         page.wait_for_timeout(600)
 
+        # 标记已读 / 未读：本机会话带未读状态，右键菜单两项都要能调 service
+        try:
+            frame.locator("#list .row .badge.unread").first.wait_for(timeout=6000)
+        except Exception:
+            failures.append("本机会话没有显示未读标记（unreadState 没生效）")
+        wb_row = frame.locator("#list .row").first
+        wb_row.click(button="right")
+        frame.locator("#rowMenu").wait_for(state="visible", timeout=4000)
+        wb_labels = frame.locator("#rowMenu .mi").all_inner_texts()
+        for need in ("标记已读", "标记未读"):
+            if not any(need in item for item in wb_labels):
+                failures.append(f"WorkBuddy 右键菜单缺少「{need}」，实际：{wb_labels}")
+        frame.locator("#rowMenu .mi", has_text="标记已读").first.click()
+        try:
+            page.wait_for_function(
+                "() => (window.__HOST_CALLS__ || []).some(c => c.method === 'markRead')", timeout=6000
+            )
+        except Exception:
+            failures.append("点标记已读没有调用 service 的 markRead")
+        page.wait_for_timeout(400)
+        if frame.locator("#list .row .badge.unread").count() != 0:
+            failures.append("标记已读后未读标记没消失")
+
+        wb_row.click(button="right")
+        frame.locator("#rowMenu").wait_for(state="visible", timeout=4000)
+        frame.locator("#rowMenu .mi", has_text="标记未读").first.click()
+        try:
+            page.wait_for_function(
+                "() => (window.__HOST_CALLS__ || []).some(c => c.method === 'markUnread')", timeout=6000
+            )
+        except Exception:
+            failures.append("点标记未读没有调用 service 的 markUnread")
+        try:
+            frame.locator("#list .row .badge.unread").first.wait_for(timeout=6000)
+        except Exception:
+            failures.append("标记未读后没有出现未读标记")
+
         # WorkBuddy 侧新建会话：以前这个按钮在 wb 标签下是隐藏的
         if frame.locator("#btnNew").is_hidden():
             failures.append("WorkBuddy 标签下「+ 新建」应该可见")
@@ -196,6 +237,8 @@ def main() -> int:
             failures.append("WorkBuddy 会话详情没有显示出对方回复")
         page.wait_for_timeout(2200)
         page.locator("#panel").screenshot(path=shot_path("panel-wb.png"))
+        if frame.locator("#btnMarkReadDetail").is_hidden() or frame.locator("#btnMarkUnreadDetail").is_hidden():
+            failures.append("WorkBuddy 会话详情应显示标记已读 / 未读按钮")
         frame.locator("#btnBack").click()
 
         # 其他本地 harness（Codex）：标签页按探测结果生成，只读

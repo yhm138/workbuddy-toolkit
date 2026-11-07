@@ -1,5 +1,6 @@
 /**
- * 给 WorkBuddy 桌面端的「任务（会话）」右键菜单补一项「复制 Session ID」。
+ * 给 WorkBuddy 桌面端的「任务（会话）」右键菜单补三项：
+ *   复制 Session ID / 标记已读 / 标记未读
  *
  * 运行位置：宿主主窗口的渲染进程（由 CDP 的 Runtime.evaluate / Page.addScriptToEvaluateOnNewDocument 注入）。
  * 为什么这么干：官方扩展 manifest 的 ui 只有 entry/pickers/modals/settings/messageCards/
@@ -17,9 +18,16 @@
  *   1. 只克隆「单个 menuitem 按钮」，绝不克隆菜单容器——上一版把 anchor.parentElement
  *      当成了行容器，实际它就是菜单容器，于是每次都在克隆整份菜单；标记又落在菜单外面，
  *      菜单里永远找不到，于是每次 DOM 变动都再克隆一次，节点无限增长直到卡死。
- *   2. 不做全局常驻 MutationObserver。只在「右键会话行」之后开 1.2 秒短窗口，80ms 查一次，
+ *   2. 不做全局常驻 MutationObserver。只在「右键会话行」之后开 2.6 秒短窗口，80ms 查一次，
  *      命中或超时就停。空闲时零开销。
  *   3. 卸载时自己删掉插入的节点，不等 React 来收拾。
+ *
+ * 已读 / 未读怎么落地（2026-11-07 实测）：
+ *   - 标记已读有宿主通道 wb:conversations:markRead，这里先直接调，最快也最可靠。
+ *   - 标记未读宿主 daemon 根本没注册通道（[MethodChannel] no handler），只能由扩展
+ *     service 直写 workbuddy.db 的 sessions.unread。渲染进程够不着磁盘，所以走
+ *     CDP 的 Runtime.addBinding：页面调 window.__dshBridgeCall，service 处理完用
+ *     window.__dshBridgeResult 把结果送回来。
  */
 (() => {
   "use strict";
@@ -27,20 +35,23 @@
   const GUARD = "__dshCopySessionMenu";
   if (window[GUARD]) return;
 
-  const MARK = "data-dsh-copy-session";
+  const MARK = "data-dsh-copy-session"; // 属性名沿用旧值，值改成菜单项的 key
   // 菜单渲染有快有慢，1.2s 实测偶尔不够（项会晚到 1s 左右）；2.6s 足够且仍是短窗口
   const ARM_MS = 2600;
   const TICK_MS = 80;
-  const MAX_MARKS = 3;
+  const MAX_MARKS = 3; // 一次最多插三项，见 MENU_ITEMS
   // 单个菜单条目的合理上限。守卫的本意是「别把容器当条目克隆」，
   // 但数字压太狠会把图标复杂的正常条目也挡掉，所以放宽，另用 role 判容器。
   const MAX_CLONE_NODES = 24;
+  const BRIDGE_RESULT = "__dshBridgeResult";
 
   let armedUntil = 0;
   let timer = null;
   let pendingId = "";
   let disabled = false;
   let lastReject = "";
+  let callSeq = 0;
+  const pendingCalls = Object.create(null);
 
   /* ---------------- 记录右键的是哪个会话 ---------------- */
 
@@ -74,7 +85,8 @@
     }
     const menu = findMenu();
     if (!menu) return false;
-    if (menu.querySelector(`[${MARK}]`)) {
+    // 三项要齐，只插了一两项时继续补，别早早收工
+    if (menu.querySelectorAll(`[${MARK}]`).length >= MENU_ITEMS.length) {
       stopTimer();
       return true;
     }
@@ -102,43 +114,63 @@
     return null;
   }
 
-  /* ---------------- 造一项 ---------------- */
+  /* ---------------- 菜单项定义 ---------------- */
 
   const CLIPBOARD_ICON =
     '<path fill="currentColor" d="M6.5 1.5a1 1 0 0 0-1 1V3H4.5A1.5 1.5 0 0 0 3 4.5v9A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 11.5 3H10v-.5a1 1 0 0 0-1-1H6.5Zm0 1.5H9V3H6.5v-.5ZM4.5 4.5h1V6h5V4.5h1v9h-7v-9Z"/>';
+  const READ_ICON =
+    '<path fill="currentColor" d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2Zm0 1.5A4.5 4.5 0 1 1 8 12.5 4.5 4.5 0 0 1 8 3.5Z"/><path fill="currentColor" d="m7.1 10.4-2.4-2.4 1-1 1.4 1.4 3.2-3.2 1 1-4.2 4.2Z"/>';
+  const UNREAD_ICON =
+    '<path fill="currentColor" d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2Zm0 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z"/>';
 
-  function injectInto(menu) {
-    // 已经有若干项了说明之前插过，别再加
-    if (document.querySelectorAll(`[${MARK}]`).length >= MAX_MARKS) return true;
+  const MENU_ITEMS = [
+    {
+      key: "copy",
+      label: "复制 Session ID",
+      icon: CLIPBOARD_ICON,
+      run: async (id) => {
+        const ok = await copyText(id);
+        return { ok, message: ok ? "已复制 Session ID" : "复制失败" };
+      },
+    },
+    {
+      key: "read",
+      label: "标记已读",
+      icon: READ_ICON,
+      run: async (id) => {
+        const res = await markAs(id, false);
+        return { ok: res.ok, message: res.ok ? "已标记已读" : "标记已读失败：" + (res.error || "") };
+      },
+    },
+    {
+      key: "unread",
+      label: "标记未读",
+      icon: UNREAD_ICON,
+      run: async (id) => {
+        const res = await markAs(id, true);
+        return { ok: res.ok, message: res.ok ? "已标记未读" : "标记未读失败：" + (res.error || "") };
+      },
+    },
+  ];
 
-    const items = [...menu.querySelectorAll('button[role="menuitem"]')];
-    if (!items.length) {
-      lastReject = "菜单里还没有 menuitem";
-      return false;
-    }
+  /* ---------------- 造一项 ---------------- */
 
-    const anchor = items.find((el) => /重命名|Rename/.test(el.textContent || "")) || items[0];
-    const parent = anchor.parentElement;
-    if (!parent) {
-      lastReject = "锚点没有父节点";
-      return false;
-    }
-
+  function makeItem(anchor, spec) {
     // 铁律 1：只克隆这一颗按钮。判「克隆错了容器」的本质依据是里面还套着菜单项，
     // 而不是子节点个数——按个数卡会把图标节点多的正常条目也挡掉。
     const clone = anchor.cloneNode(true);
     const nested = clone.querySelectorAll('[role="menuitem"]').length;
     if (nested > 0) {
       lastReject = `克隆到了容器（内含 ${nested} 个 menuitem）`;
-      return false;
+      return null;
     }
     const nodeCount = clone.querySelectorAll("*").length;
     if (nodeCount > MAX_CLONE_NODES) {
       lastReject = `克隆体太大（${nodeCount} 个节点）`;
-      return false;
+      return null;
     }
 
-    clone.setAttribute(MARK, "1");
+    clone.setAttribute(MARK, spec.key);
     clone.removeAttribute("aria-checked");
     clone.removeAttribute("data-state");
     clone.setAttribute("role", "menuitem");
@@ -151,7 +183,7 @@
         if (v !== null) next.setAttribute(attr, v);
       }
       if (!next.getAttribute("viewBox")) next.setAttribute("viewBox", "0 0 16 16");
-      next.innerHTML = CLIPBOARD_ICON;
+      next.innerHTML = spec.icon;
       oldIcon.replaceWith(next);
     }
 
@@ -159,12 +191,12 @@
     let renamed = false;
     for (const node of [...clone.childNodes]) {
       if (node.nodeType === Node.TEXT_NODE && node.nodeValue && node.nodeValue.trim()) {
-        node.nodeValue = "复制 Session ID";
+        node.nodeValue = spec.label;
         renamed = true;
         break;
       }
     }
-    if (!renamed) clone.appendChild(document.createTextNode("复制 Session ID"));
+    if (!renamed) clone.appendChild(document.createTextNode(spec.label));
 
     const swallow = (event) => {
       event.preventDefault();
@@ -176,19 +208,57 @@
       "click",
       async (event) => {
         swallow(event);
-        const ok = await copyText(pendingId);
+        // 先固定 id：await 期间用户可能又右键了别的会话
+        const currentId = pendingId;
         removeNode(clone);
         closeMenu();
-        toast(ok ? "已复制 Session ID" : "复制失败");
+        let res;
+        try {
+          res = await spec.run(currentId);
+        } catch (error) {
+          res = { ok: false, message: "操作失败：" + String((error && error.message) || error) };
+        }
+        toast(res.message);
       },
       true
     );
     clone.addEventListener("mousedown", swallow, true);
     clone.addEventListener("pointerdown", swallow, true);
+    return clone;
+  }
 
-    parent.insertBefore(clone, anchor.nextSibling);
+  function injectInto(menu) {
+    const present = Object.create(null);
+    for (const node of menu.querySelectorAll(`[${MARK}]`)) present[node.getAttribute(MARK)] = node;
+    if (Object.keys(present).length >= MAX_MARKS) return true;
+
+    // 排除我们自己插的项，别拿它们当锚点
+    const items = [...menu.querySelectorAll('button[role="menuitem"]')].filter((el) => !el.hasAttribute(MARK));
+    if (!items.length) {
+      lastReject = "菜单里还没有 menuitem";
+      return false;
+    }
+
+    const anchor = items.find((el) => /重命名|Rename/.test(el.textContent || "")) || items[0];
+    const parent = anchor.parentElement;
+    if (!parent) {
+      lastReject = "锚点没有父节点";
+      return false;
+    }
+
+    let cursor = anchor;
+    for (const spec of MENU_ITEMS) {
+      if (present[spec.key]) {
+        cursor = present[spec.key];
+        continue;
+      }
+      const clone = makeItem(anchor, spec);
+      if (!clone) return false;
+      parent.insertBefore(clone, cursor.nextSibling);
+      cursor = clone;
+    }
     lastReject = "";
-    return true;
+    return menu.querySelectorAll(`[${MARK}]`).length >= MENU_ITEMS.length;
   }
 
   function removeNode(node) {
@@ -197,6 +267,53 @@
     } catch {
       /* ignore */
     }
+  }
+
+  /* ---------------- 标记已读 / 未读 ---------------- */
+
+  function bridgeCall(method, id) {
+    if (typeof window.__dshBridgeCall !== "function") {
+      return Promise.resolve({ ok: false, error: "桥服务未就绪（更新扩展后重启一次客户端）" });
+    }
+    return new Promise((resolve) => {
+      const token = String(++callSeq);
+      const timeout = setTimeout(() => {
+        delete pendingCalls[token];
+        resolve({ ok: false, error: "桥服务没有回话（超时）" });
+      }, 8000);
+      pendingCalls[token] = (res) => {
+        clearTimeout(timeout);
+        delete pendingCalls[token];
+        resolve(res);
+      };
+      try {
+        window.__dshBridgeCall(JSON.stringify({ token, method, id }));
+      } catch (error) {
+        clearTimeout(timeout);
+        delete pendingCalls[token];
+        resolve({ ok: false, error: String((error && error.message) || error) });
+      }
+    });
+  }
+
+  window[BRIDGE_RESULT] = (res) => {
+    const token = res && res.token;
+    const fn = pendingCalls[token];
+    if (fn) fn(res);
+  };
+
+  async function markAs(id, unread) {
+    if (!id) return { ok: false, error: "没记到会话 ID" };
+    // 标记已读优先直达宿主通道：不依赖 binding，也省一次往返
+    if (!unread && typeof window.__wbInvoke === "function") {
+      try {
+        const direct = await window.__wbInvoke("wb:conversations:markRead", id);
+        if (!direct || !direct.__wbError) return { ok: true };
+      } catch {
+        /* 退回桥 */
+      }
+    }
+    return bridgeCall(unread ? "markUnread" : "markRead", id);
   }
 
   /* ---------------- 复制 ---------------- */
@@ -324,6 +441,9 @@
         armRemainMs: Math.max(0, armedUntil - Date.now()),
         timerAlive: Boolean(timer),
         marks: document.querySelectorAll(`[${MARK}]`).length,
+        items: MENU_ITEMS.map((spec) => spec.key),
+        bridgeReady: typeof window.__dshBridgeCall === "function",
+        pendingCalls: Object.keys(pendingCalls).length,
         disabled,
         menuOpen: Boolean(findMenu()),
         menuItems: findMenu()?.querySelectorAll('button[role="menuitem"]').length ?? 0,

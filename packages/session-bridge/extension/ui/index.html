@@ -139,6 +139,7 @@
   .chip:hover { color: var(--fg); background: var(--bg-hover); }
   .badge { font-size: 9.5px; padding: 0 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--fg-mute); }
   .badge.run { color: var(--ok); border-color: rgba(22,163,74,.35); }
+  .badge.unread { color: var(--warn); border-color: rgba(180,83,9,.38); background: rgba(180,83,9,.07); }
 
   .empty { padding: 28px 16px; text-align: center; color: var(--fg-mute); font-size: 12px; line-height: 1.7; }
   .empty b { color: var(--fg-dim); font-weight: 500; }
@@ -444,6 +445,8 @@
         <div class="id" id="dId"></div>
       </div>
       <button class="chip" id="btnCopyDetail">复制 ID</button>
+      <button class="chip" id="btnMarkReadDetail" hidden>标已读</button>
+      <button class="chip" id="btnMarkUnreadDetail" hidden>标未读</button>
     </div>
     <div class="messages" id="messages"></div>
     <div class="readonly-bar" id="readonlyBar" hidden></div>
@@ -531,6 +534,8 @@ var state = {
   dsh: [],
   wb: [],
   wbSource: "local",
+  /* WorkBuddy 本机会话的未读状态：id -> true/false，只在本机来源有意义 */
+  unread: {},
   /* 其他本地 harness（Codex / Claude）：只有读的能力，标签页按实际检测结果生成 */
   harnesses: {},
   harnessRows: [],
@@ -821,6 +826,8 @@ var ICON = {
   text: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 4.5h10M3 8h10M3 11.5h6"/></svg>',
   folder: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3L8 6h4.5A1.5 1.5 0 0 1 14 7.5V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/></svg>',
   term: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 7l1.8 1.6L5 10.2M8.5 10.5h3"/></svg>',
+  check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="5.6"/><path d="m5.4 8.2 1.8 1.8 3.5-3.7"/></svg>',
+  dot: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="5.6"/><circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/></svg>',
 };
 
 function menuItem(label, icon, onClick, disabled) {
@@ -867,6 +874,12 @@ function openRowMenu(row, x, y) {
     var resume = harnessMeta.resumePrefix + " " + row.id;
     menu.appendChild(menuItem("复制恢复命令", ICON.term, function () { copyValue(resume, "恢复命令"); }));
   }
+  /* 未读是 WorkBuddy 会话的概念；DSH / 其它 harness 的本地记录没有这个字段 */
+  if (isWb) {
+    menu.appendChild(el("div", "sep"));
+    menu.appendChild(menuItem("标记已读", ICON.check, function () { setUnreadFlag(row.id, false); }, !row.id));
+    menu.appendChild(menuItem("标记未读", ICON.dot, function () { setUnreadFlag(row.id, true); }, !row.id));
+  }
   menu.appendChild(el("div", "sep"));
   menu.appendChild(
     menuItem("在资源管理器中显示", ICON.folder, function () { revealPath(cwd || row.file); }, !cwd && !row.file)
@@ -892,6 +905,44 @@ function copyValue(text, label) {
       } else {
         toast("复制失败：" + e.message, 3000);
       }
+    });
+}
+
+/* ---------------- 标记已读 / 未读 ---------------- */
+
+/**
+ * 标记已读走宿主通道，标记未读由 service 直写 db（宿主没注册那个通道）。
+ * 两边都把结果落到 state.unread，列表行立刻跟着变，不必等宿主广播。
+ */
+function setUnreadFlag(id, want) {
+  if (!id) { toast("没有会话 ID"); return; }
+  var method = want ? "markUnread" : "markRead";
+  return svc(method, { conversationId: id }, 15000)
+    .then(function (res) {
+      state.unread[id] = Boolean(want);
+      render();
+      toast(want ? "已标记未读" : "已标记已读");
+      if (want && res && res.refreshed === false) {
+        log("markUnread: 没能触发列表刷新，侧栏圆点可能要等下一次刷新");
+      }
+    })
+    .catch(function (e) {
+      toast("标记失败：" + e.message, 3000);
+    });
+}
+
+/** 每次加载完 WorkBuddy 本机会话，补一份未读状态给列表行用。 */
+function refreshUnread() {
+  if (state.tab !== "wb" || state.wbSource === "cloud") return Promise.resolve();
+  var ids = currentRows().map(function (row) { return row.id; }).filter(Boolean).slice(0, 200);
+  if (!ids.length) return Promise.resolve();
+  return svc("unreadState", { ids: ids }, 12000)
+    .then(function (res) {
+      state.unread = (res && res.items) || {};
+      render();
+    })
+    .catch(function (e) {
+      log("unreadState error " + e.message);
     });
 }
 
@@ -1017,6 +1068,7 @@ function loadWb() {
         $("bannerHost").appendChild(box);
       }
       render();
+      refreshUnread();
       log("listWb " + source + " " + state.wb.length + (res.cloudError ? " cloudError" : ""));
     })
     .catch(function (e) {
@@ -1304,6 +1356,7 @@ function render() {
     if (row.cwd) sub.appendChild(el("span", "cwd", shortCwd(row.cwd)));
     if (row.updatedAt) sub.appendChild(el("span", null, fmtTime(row.updatedAt)));
     if (row.running) sub.appendChild(el("span", "badge run", "运行中"));
+    if (state.tab === "wb" && state.unread[row.id]) sub.appendChild(el("span", "badge unread", "未读"));
     if (row.subagent) sub.appendChild(el("span", "badge", "子 agent" + (row.agent ? " · " + row.agent : "")));
     main.appendChild(sub);
     main.appendChild(el("div", "id", row.id));
@@ -1360,6 +1413,9 @@ function openDetail(row) {
   $("btnCancel").hidden = isWb;
   $("wait").parentNode.hidden = isWb;
   $("btnCopyDetail").textContent = "复制 ID";
+  /* 只有 WorkBuddy 本机会话有 unread 这一列 */
+  $("btnMarkReadDetail").hidden = !isWb;
+  $("btnMarkUnreadDetail").hidden = !isWb;
   /* Codex / Claude 的写入通道是私有 IPC，硬塞会打乱它们自己的会话状态——
      这两个来源只读，底部说清楚，别让人以为发了没反应。 */
   $("composer").hidden = isReadOnly;
@@ -1767,6 +1823,12 @@ $("btnNewCreate").addEventListener("click", createSession);
 $("btnBack").addEventListener("click", closeDetail);
 $("btnCopyDetail").addEventListener("click", function () {
   if (state.current) copyId(state.current.id);
+});
+$("btnMarkReadDetail").addEventListener("click", function () {
+  if (state.current) setUnreadFlag(state.current.id, false);
+});
+$("btnMarkUnreadDetail").addEventListener("click", function () {
+  if (state.current) setUnreadFlag(state.current.id, true);
 });
 $("composer").addEventListener("submit", sendPrompt);
 $("prompt").addEventListener("keydown", function (e) {

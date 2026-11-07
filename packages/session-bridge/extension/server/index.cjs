@@ -22,6 +22,7 @@ const { DshMcpClient, DEFAULT_URL } = require("./mcp.cjs");
 const { listLocalSessions, readLocalSession } = require("./sessions.cjs");
 const { describe: describeHarnesses, getHarness } = require("./harnesses.cjs");
 const { MenuInjector } = require("./menu-inject.cjs");
+const { readUnread, setUnread } = require("./unread.cjs");
 const {
   clipboard,
   dshHome,
@@ -75,6 +76,9 @@ const QUEUE_ALLOWED = new Set([
   "createDsh",
   "cancelDsh",
   "copyText",
+  "markRead",
+  "markUnread",
+  "unreadState",
   "hostChannels",
   "hostInvoke",
 ]);
@@ -236,11 +240,19 @@ function activate(wb) {
   const endpoint = mcpEndpoint() || DEFAULT_URL;
   let disposed = false;
   let probeCache = null;
+  let bridgeMethods = null;
   const client = new DshMcpClient({ url: endpoint, token: readDshToken(), timeoutMs: 20000 });
 
   // 会话菜单注入：只有宿主带着调试端口启动时才真正跑起来，否则整体休眠。
+  // onBridgeCall 接住渲染进程通过 CDP Runtime.addBinding 发来的请求——
+  // 右键菜单里「标记未读」要直写 workbuddy.db，只有这个进程够得着。
   const menuInjector = new MenuInjector({
     logFile: path.join(wbHome(), "dsh-skills", "menu-inject.log"),
+    onBridgeCall: (method, req) => {
+      const fn = bridgeMethods && bridgeMethods[method];
+      if (typeof fn !== "function") throw fault(`桥没有这个方法：${method}`, "INVALID_ARGUMENT");
+      return fn({ callerId: "cdp-binding" }, { conversationId: req.id });
+    },
   });
   menuInjector.start();
 
@@ -836,6 +848,50 @@ function activate(wb) {
       return { ok: result.ok, method: result.method, length: text.length };
     },
 
+    /**
+     * 标记已读：宿主有官方通道 wb:conversations:markRead，
+     * 它内部走 setUnread(id, false) + emitConversationChanged，列表圆点立即消失。
+     */
+    markRead: async (ctx, payload) => {
+      const id = cleanString(payload?.conversationId ?? payload?.id);
+      if (!id) throw fault("缺少 conversationId", "INVALID_ARGUMENT");
+      const res = await wbCall(wb, "wb:conversations:markRead", id);
+      // 通道不存在或业务失败都是 resolve 一个 __wbError，不是 reject（老坑）
+      if (res && res.__wbError) {
+        throw fault(`宿主标记已读失败：${res.message || "未知错误"}`, "HOST_ERROR");
+      }
+      probeLog("markRead", { conversationId: id });
+      return { ok: true, conversationId: id, unread: false, method: "host" };
+    },
+
+    /**
+     * 标记未读：宿主没注册 wb:conversations:markUnread（实测 no handler），
+     * 内部那个只给后台任务用。所以直写 sessions.unread=1，再借一次无关会话的
+     * markRead 触发 listChanged，让刚写进去的状态立刻在侧栏显示。
+     */
+    markUnread: async (ctx, payload) => {
+      const id = cleanString(payload?.conversationId ?? payload?.id);
+      if (!id) throw fault("缺少 conversationId", "INVALID_ARGUMENT");
+      const written = setUnread(wbHome(), id, true);
+      if (!written.ok) throw fault(written.error || "写入 sessions.unread 失败", "DB_ERROR");
+      const refreshed = await borrowListRefresh(wb, id);
+      probeLog("markUnread", { conversationId: id, refreshed, ...written });
+      return {
+        ok: true,
+        conversationId: id,
+        unread: true,
+        method: "db",
+        refreshed,
+        changed: written.changed,
+      };
+    },
+
+    /** 批量查未读状态；云端会话不在本库，查不到就不出现在结果里。 */
+    unreadState: async (ctx, payload) => {
+      const ids = Array.isArray(payload?.ids) ? payload.ids : [];
+      return { ok: true, items: readUnread(wbHome(), ids) };
+    },
+
     /** 会话菜单注入状态：「复制 Session ID」到底挂上没挂上 */
     menuInject: async () => ({ ok: true, ...menuInjector.status() }),
 
@@ -845,6 +901,8 @@ function activate(wb) {
       menuInjector.stop();
     },
   };
+  // CDP binding 的回调在用户点击时才触发，那时 methods 早已赋值
+  bridgeMethods = methods;
 
   // dispose 只是登记，真正的清理由宿主的 dispose 钩子调用。
   const { dispose: _disposeMethod, ...publicMethods } = methods;
@@ -919,6 +977,26 @@ function wbCall(wb, channel, ...args) {
     throw fault(`宿主没有提供 invoke 通道（${channel}）`, "NO_INVOKE");
   }
   return wb.invoke(channel, ...args);
+}
+
+/**
+ * 直写 sessions.unread 之后，宿主内存里那份列表不会自己变。
+ * 借一个「本来就是已读」的无关会话调一次 markRead（setUnread 对它其实是 no-op），
+ * 目的只是让它 emitConversationChanged → listChanged → 渲染进程重新拉列表，
+ * 这样刚写进去的 unread=1 立刻就显示成圆点。找不到候选就返回 false，
+ * 交给调用方提示「列表可能要刷新一下」。
+ */
+async function borrowListRefresh(wb, targetId) {
+  try {
+    const list = await wbCall(wb, "wb:conversations:list");
+    const items = Array.isArray(list?.items) ? list.items : [];
+    const other = items.find((it) => it && it.id && it.id !== targetId && it.unread === false);
+    if (!other) return false;
+    const res = await wbCall(wb, "wb:conversations:markRead", other.id);
+    return !(res && res.__wbError);
+  } catch {
+    return false;
+  }
 }
 
 /**

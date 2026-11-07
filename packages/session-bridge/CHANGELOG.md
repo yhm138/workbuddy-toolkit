@@ -2,7 +2,26 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## Unreleased
+## 1.3.0 — 2026-11-07
+
+右键菜单和会话桥面板都能「标记已读 / 标记未读」；顺带把客户端升级后
+「复制 Session ID」失效的问题修了。
+
+### 新增
+
+- **标记已读**：走宿主官方通道 `wb:conversations:markRead`，内部会
+  `setUnread(id, false)` + `emitConversationChanged`，列表圆点立即消失。
+- **标记未读**：宿主 daemon 根本没注册 `wb:conversations:markUnread`
+  （`createConversationsApi` 里那个只给后台任务完成时用，MethodChannel 没暴露），
+  实测调过去返回 `[MethodChannel] no handler for channel`。所以由 service 用
+  Node 22 内置的 `node:sqlite` 直写 `sessions.unread = 1`，再借一个无关已读会话的
+  `markRead` 触发 `listChanged`，让刚写进去的状态立刻在侧栏显示。
+- **两个入口**：宿主会话右键菜单（与「复制 Session ID」并排；渲染进程够不着磁盘，
+  走 CDP `Runtime.addBinding` 回调到 service）；会话桥面板的右键菜单和详情页按钮，
+  列表行显示「未读」标记，状态来自新方法 `unreadState`。
+- `markRead` / `markUnread` / `unreadState` 都进了文件队列白名单，命令行同样能调。
+- 新增 14 例单测（db 读写、假成功判定、借道刷新、binding 链路），全量 91 例；
+  面板 E2E 补了「未读 → 已读 → 未读」的完整流程。
 
 ### 修复
 

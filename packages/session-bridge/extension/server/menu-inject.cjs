@@ -1,11 +1,15 @@
 "use strict";
 
 /**
- * 把「复制 Session ID」注入到 WorkBuddy 主窗口的会话菜单里。
+ * 把「复制 Session ID」「标记已读」「标记未读」注入到 WorkBuddy 主窗口的会话菜单里。
  *
  * 存在的理由：宿主扩展 manifest 没有菜单贡献点，会话菜单是 React 里硬编码的条件数组，
  * 官方没给插槽。唯一合法的入口是宿主自己留的调试通道——
  * 主进程启动时读 WORKBUDDY_REMOTE_DEBUGGING_PORT，设了就给 Chromium 开 remote-debugging-port。
+ *
+ * 菜单里有一项要写 workbuddy.db（标记未读没有宿主通道），渲染进程够不着磁盘。
+ * 用 CDP 的 Runtime.addBinding 开一条单向回调：页面调 window.__dshBridgeCall，
+ * 事件回到这个进程交给 onBridgeCall 处理，结果再用 Runtime.evaluate 送回页面。
  *
  * 行为约定：
  *   - 环境变量没设：整体休眠，一次网络请求都不发。
@@ -22,6 +26,8 @@ const POLL_ACTIVE_MS = 5000;
 const LOG_LIMIT = 256 * 1024;
 // 没启用时多久回看一眼配置文件（用户点「启用」后不必重启 service）
 const RELOAD_MS = 20000;
+// 页面 → service 的 CDP binding 名字；注入脚本靠它在 window 上找函数
+const BRIDGE_BINDING = "__dshBridgeCall";
 
 function normalizePort(value) {
   const raw = String(value ?? "").trim();
@@ -96,6 +102,7 @@ class MenuInjector {
   constructor(options = {}) {
     this.logFile = options.logFile || "";
     this.configFile = options.configFile || defaultConfigFile(this.logFile);
+    this.onBridgeCall = typeof options.onBridgeCall === "function" ? options.onBridgeCall : null;
     const resolved = resolvePortInfo(this.configFile);
     this.port = resolved.port;
     this.portSource = resolved.source;
@@ -263,6 +270,14 @@ class MenuInjector {
           this.state.connected = this.sessions.size;
         };
         await socket.send("Page.enable");
+        await socket.send("Runtime.enable");
+        if (this.onBridgeCall) {
+          // 必须先注册再注入：注入脚本在初始化时会把 binding 挂到自己的调用链上
+          await socket.send("Runtime.addBinding", { name: BRIDGE_BINDING });
+          socket.on("Runtime.bindingCalled", (params) => {
+            if (params && params.name === BRIDGE_BINDING) this.#onBinding(socket, params);
+          });
+        }
         await socket.send("Runtime.evaluate", {
           expression: this.source,
           awaitPromise: false,
@@ -278,6 +293,29 @@ class MenuInjector {
       }
     }
     this.state.connected = this.sessions.size;
+  }
+
+  /** 页面点「标记已读 / 未读」→ Runtime.bindingCalled → 这里 → 回传结果给页面。 */
+  async #onBinding(socket, params) {
+    let req = null;
+    let result;
+    try {
+      req = JSON.parse(String(params?.payload || ""));
+      const data = await this.onBridgeCall(String(req.method || ""), req);
+      result = { ok: true, token: req.token, result: data };
+    } catch (error) {
+      result = { ok: false, token: req?.token, error: String(error?.message || error) };
+      this.#log("warn", `菜单请求失败：${result.error}`);
+    }
+    try {
+      await socket.send("Runtime.evaluate", {
+        expression: `window.__dshBridgeResult && window.__dshBridgeResult(${JSON.stringify(result)})`,
+        awaitPromise: false,
+        allowUnsafeEvalBlockedByCSP: true,
+      });
+    } catch (error) {
+      this.#log("warn", `回传菜单结果失败：${error.message}`);
+    }
   }
 
   #log(level, message) {

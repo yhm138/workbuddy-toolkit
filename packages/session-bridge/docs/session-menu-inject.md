@@ -231,6 +231,46 @@ WorkBuddy 主进程（带 --remote-debugging-port=9333）
 
 ---
 
+## 5.5 标记已读 / 未读：宿主只给了半条路
+
+1.3.0 起右键菜单从一项变成三项：复制 Session ID、标记已读、标记未读。
+面板里也有同样的入口（行右键 + 详情页按钮），列表会给未读会话加一个「未读」标记。
+
+两条路并不对称，这是查宿主源码再拿不存在的假 ID 实测出来的：
+
+| 操作 | 通道 | 落点 |
+| --- | --- | --- |
+| 标记已读 | `wb:conversations:markRead` **存在** | `setUnread(id, false)` + `emitConversationChanged('updated')`，侧栏圆点立即消失 |
+| 标记未读 | `wb:conversations:markUnread` **没注册** | `createConversationsApi().markUnread()` 只给后台任务完成时用；MethodChannel 调过去返回 `[MethodChannel] no handler for channel` |
+
+所以标记未读只能由扩展 service 直写 `~/.workbuddy/workbuddy.db` 的
+`sessions.unread = 1`（用 Node 22 内置的 `node:sqlite`——宿主 fork 的裸进程装不了
+第三方依赖，也 require 不到 asar 里的 node_modules）。写完宿主内存里那份列表不会
+自己变，于是再借一个「本来就是已读」的无关会话调一次 `markRead`：`setUnread` 对它
+是 no-op，但会广播 `listChanged`，渲染进程重新拉列表时就读到刚写进去的 1，圆点
+当场出现。找不到候选时仍会写库，只是 `refreshed:false`，圆点要等下一次刷新。
+
+渲染进程够不着磁盘，所以菜单点击走 CDP 的 `Runtime.addBinding`：
+
+```
+页面 window.__dshBridgeCall({token, method, id})
+  → Runtime.bindingCalled 事件回到 menu-inject.cjs
+  → 转给 service 的 markRead / markUnread
+  → Runtime.evaluate 调 window.__dshBridgeResult(...) 把结果送回页面 toast
+```
+
+标记已读不用绕这一圈：`__wbInvoke('wb:conversations:markRead', id)` 直接调宿主即可，
+binding 没就绪时它照样能用。两条路径都要判 `__wbError`——通道不存在时 IPC 不 reject，
+只 resolve 一个错误对象（复制 ID 那个功能上踩过）。
+
+命令行也能调（走文件队列，service 得在线）：
+
+```bash
+node bin/dsh2wb.mjs wb-call markRead    --payload '{"conversationId":"<id>"}'
+node bin/dsh2wb.mjs wb-call markUnread  --payload '{"conversationId":"<id>"}'
+node bin/dsh2wb.mjs wb-call unreadState --payload '{"ids":["<id>"]}'
+```
+
 ## 六、风险与边界
 
 | 项 | 说明 |

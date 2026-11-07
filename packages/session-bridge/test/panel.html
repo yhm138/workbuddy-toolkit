@@ -106,7 +106,7 @@
       reply(port, d.requestId, {
         fallbackToken: "fake-token-" + Date.now(),
         fallbackExpiresAt: Date.now() + 300000,
-        methods: ["ping", "status", "listDsh", "listWb", "messagesDsh", "promptDsh", "cancelDsh", "createDsh", "createWb", "promptWb", "requestsWb", "readWbLocal", "harnesses", "listHarness", "readHarness", "revealPath", "copyText", "menuInject", "hostChannels", "hostInvoke"]
+        methods: ["ping", "status", "listDsh", "listWb", "messagesDsh", "promptDsh", "cancelDsh", "createDsh", "createWb", "promptWb", "requestsWb", "readWbLocal", "harnesses", "listHarness", "readHarness", "revealPath", "copyText", "menuInject", "markRead", "markUnread", "unreadState", "hostChannels", "hostInvoke"]
       });
       return;
     }
@@ -200,6 +200,24 @@
         case "copyText":
           window.__COPIED__ = payload.text;
           return reply(port, d.requestId, { ok: true, method: "fake-clip", length: String(payload.text || "").length });
+        // 已读 / 未读：默认让第一条示例会话带未读，方便 E2E 断言列表标记
+        case "markRead":
+          window.__UNREAD__ = window.__UNREAD__ || {};
+          window.__UNREAD__[payload.conversationId] = false;
+          return reply(port, d.requestId, { ok: true, conversationId: payload.conversationId, unread: false, method: "host" });
+        case "markUnread":
+          window.__UNREAD__ = window.__UNREAD__ || {};
+          window.__UNREAD__[payload.conversationId] = true;
+          return reply(port, d.requestId, { ok: true, conversationId: payload.conversationId, unread: true, method: "db", refreshed: true, changed: true });
+        case "unreadState":
+          var unreadItems = {};
+          (payload.ids || []).forEach(function (id) {
+            var known = window.__UNREAD__ && window.__UNREAD__[id];
+            unreadItems[id] = known === undefined
+              ? id === "44444444-4444-4444-8444-444444444444"
+              : Boolean(known);
+          });
+          return reply(port, d.requestId, { ok: true, items: unreadItems });
         case "revealPath":
           window.__REVEALED__ = payload.path;
           return reply(port, d.requestId, { ok: true, path: payload.path });

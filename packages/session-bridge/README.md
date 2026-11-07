@@ -54,7 +54,7 @@ Win+R 输入 `shell:startup`，删掉 `WorkBuddySessionBridgeGuard.vbs`；
 
 
 想右键会话直接「复制 Session ID」：那是另一个独立项目
-**[workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)**，本仓库里保留着它最早的原型。
+**[workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit/tree/main/packages/copy-session-id)**，本仓库里保留着它最早的原型。
 
 ## 用它
 
@@ -187,6 +187,7 @@ python test/panel_test.py       # 面板 E2E（Playwright + 假宿主）
 | 与任一 DSH 会话对话 / 停止 | `session_prompt`（`mode:"queue"`）、`session_cancel`，详情页 3s 轮询 |
 | 看某会话最近消息 | `session_messages`；自动识别并折叠 DSH 注入的 runtime context / skill 提醒 / 时间采样 |
 | WorkBuddy 会话：行上右键 | 查看 / 在 WorkBuddy 中打开 / 复制 ID、标题、工作目录 / 在资源管理器中显示 |
+| 标记已读 / 未读 | 已读走宿主 `wb:conversations:markRead`；未读宿主没注册通道，由 service 直写 `sessions.unread` 再借一次列表刷新。面板和宿主会话右键菜单都能点，未读会话在列表里带「未读」标记 |
 | 看得到桌面端的 WorkBuddy 会话 | 「本机」源扫 `~/.workbuddy/projects/<项目>/<会话>.jsonl`；「云端」源走 `wb.http.get`（数字 ID，另一套空间） |
 | WorkBuddy 新会话 + 双向对话 | `wb:conversations:create` → `sendPrompt`（收 ContentBlock[]）→ `requests` 读回复 |
 | 其他本地 harness（Codex / Claude） | 标签页按探测结果动态生成，只读；能看内容 / 复制 ID / 复制恢复命令 |
@@ -421,7 +422,7 @@ python test/panel_test.py     # 面板 E2E：Playwright + 假宿主，跑完把�
 
 * **不可移植**：`dsh-codex-ui`（宿主 UI，插件无法注入前端）、`steer` 键位、插件市场自定义索引。
   * 例外：会话菜单那一处可以用 CDP 绕过去，已抽成独立项目
-    [workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit)，
+    [workbuddy-session-menu](https://github.com/yhm138/workbuddy-toolkit/tree/main/packages/copy-session-id)，
     代价是快捷方式要带调试参数。
 * **需手动**：默认模型（`deepseek-flash` + 推理强度 max）、默认权限——**建议不要照搬 `danger-full-access`**，
   改成「工作区可写 + 审批」。
