@@ -304,8 +304,8 @@ db 里的状态始终是真实值，重启客户端或列表刷新后宿主会�
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 徽标一直没有 | 配置文件没写 | `node bin\context-menu.mjs status` 先看「配置文件」那一行；没有就重跑 enable |
-| **面板一直显示「等主窗口…（ECONNREFUSED 127.0.0.1:9333）」** | 客户端启动时没绑上调试端口。最常见的是客户端升级抹掉了系统级快捷方式参数，只剩有竞态的环境变量 | `node bin\context-menu.mjs status` 看「用户桌面启动入口」；重跑一次 enable 生成桌面图标，托盘退出后**从桌面那个图标**重开 |
-| 重启后菜单项消失 | 同上，端口没开 → 注入器连不上 | 同上；桌面图标不会被升级抹掉，认准它启动即可 |
+| **面板徽标显示「右键菜单 ✗」（点开是 ECONNREFUSED 127.0.0.1:9333）** | 这次客户端启动时没带上 `--remote-debugging-port`。桌面上有两个 WorkBuddy 图标：系统级的 `WorkBuddy` 不带参数，用户级的 `WorkBuddy (Session ID)` 才带；环境变量兜底走 `appendSwitch` 有竞态，不能指望它 | 托盘退出，**从桌面「WorkBuddy (Session ID)」图标**重开。想让原来的图标也带参数：右键 `bin\enable-context-menu.cmd` → 以管理员身份运行一次（系统级快捷方式只有 Administrators 能改，客户端升级还会重置） |
+| 重启后菜单项消失 | 同上，端口没开 → 注入器连不上 | 同上。用户级桌面图标不会被升级抹掉，认准它启动即可 |
 | **改了代码、也重启了，行为一点没变** | 只改了仓库，没 `install-extension`；service 读的是安装副本 | 跑 `install-extension`，再托盘退出重开。核对副本 `mtime` 和内容（见上一节） |
 | 菜单里没有这一项，徽标却是 `✓` | 注入发生在页面重载之前 | 重开一次客户端；或重新右键一次会话（注入脚本按需触发） |
 | 徽标显示 `…` | 端口开了但 service 没连上 | 先跑 `node bin\context-menu.mjs status` 看端口是不是被别的程序占了；再看日志的「但不是 WorkBuddy」 |
