@@ -271,6 +271,22 @@ node bin/dsh2wb.mjs wb-call markUnread  --payload '{"conversationId":"<id>"}'
 node bin/dsh2wb.mjs wb-call unreadState --payload '{"ids":["<id>"]}'
 ```
 
+### 即时反馈这件事踩过一次
+
+直写 db 之后 `wb:conversations:list` 立刻就能返回 `unread:true`，但**侧栏不跟着变**：
+宿主渲染进程维护自己的列表状态，`emitConversationChanged` 广播过去要等下一次刷新
+才读得到；实测点完当场没有圆点，过一阵才冒出来，用户会觉得「点了没反应」。
+
+所以注入脚本在点击成功时自己补一个圆点：优先 `cloneNode(true)` 宿主现成的
+`<span class="_unreadDot_xxx">`，插到会话行的 `_header_` 里，样式完全一致；
+一个模板都找不到时才自己造一个琥珀色小点。标记已读则只把圆点设成
+`display:none`，**不 remove**——那是 React 管的节点，删了会让它在下次渲染时报错。
+所有补/收都带 `data-dsh-unread-dot` 标记，方便和宿主的真圆点区分。
+`window.__dshCopySessionMenu.paint(id, want)` 可以手动调用来排查。
+
+db 里的状态始终是真实值，重启客户端或列表刷新后宿主会画一个正式的圆点，
+我们补的不会造成重复（补之前会先检查已有圆点）。
+
 ## 六、风险与边界
 
 | 项 | 说明 |

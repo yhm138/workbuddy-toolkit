@@ -44,6 +44,7 @@
   // 但数字压太狠会把图标复杂的正常条目也挡掉，所以放宽，另用 role 判容器。
   const MAX_CLONE_NODES = 24;
   const BRIDGE_RESULT = "__dshBridgeResult";
+  const DOT_MARK = "data-dsh-unread-dot";
 
   let armedUntil = 0;
   let timer = null;
@@ -139,6 +140,7 @@
       icon: READ_ICON,
       run: async (id) => {
         const res = await markAs(id, false);
+        if (res.ok) paintUnread(id, false);
         return { ok: res.ok, message: res.ok ? "已标记已读" : "标记已读失败：" + (res.error || "") };
       },
     },
@@ -148,6 +150,7 @@
       icon: UNREAD_ICON,
       run: async (id) => {
         const res = await markAs(id, true);
+        if (res.ok) paintUnread(id, true);
         return { ok: res.ok, message: res.ok ? "已标记未读" : "标记未读失败：" + (res.error || "") };
       },
     },
@@ -316,6 +319,62 @@
     return bridgeCall(unread ? "markUnread" : "markRead", id);
   }
 
+  /* ---------------- 即时视觉反馈 ---------------- */
+
+  /**
+   * service 已经把 sessions.unread 写进库，但宿主的侧栏列表用的是自己的渲染状态，
+   * 广播过去往往要等下一次刷新才读得到——实测点完当场没有圆点，过一阵才冒出来。
+   * 所以点击成功时直接补一个圆点，给即时反馈；db 里的状态仍是真的，
+   * 重启或列表刷新后宿主会自己画一个正式的。
+   *
+   * 宿主现成的圆点长这样，插在会话行的 _header_ 里：
+   *   <span class="_unreadDot_xxx"></span>
+   * 优先克隆现成的，样式完全一致；没有模板时自己造一个。
+   * 标记已读只「隐藏」不 remove，免得把 React 管的节点删掉让它报错。
+   */
+  function conversationHeaders(id) {
+    if (!id) return [];
+    const safe = window.CSS && CSS.escape ? CSS.escape(id) : String(id).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+    const headers = new Set();
+    for (const node of document.querySelectorAll(`[data-conversation-id="${safe}"]`)) {
+      const header = node.querySelector('[class*="_header_"]');
+      if (header) headers.add(header);
+    }
+    return [...headers];
+  }
+
+  function paintUnread(id, want) {
+    const headers = conversationHeaders(id);
+    if (!headers.length) return false;
+    for (const header of headers) {
+      const own = header.querySelector(`[${DOT_MARK}]`);
+      if (want) {
+        const existing = [
+          ...header.querySelectorAll('span[class*="unreadDot"]'),
+          ...(own && !own.matches('span[class*="unreadDot"]') ? [own] : []),
+        ];
+        if (existing.length) {
+          // 已经有圆点（可能是上一步「标已读」时被隐藏的），恢复显示就好
+          for (const dot of existing) dot.style.display = "";
+          continue;
+        }
+        const template = document.querySelector('span[class*="unreadDot"]:not([data-dsh-unread-dot])');
+        const dot = template ? template.cloneNode(true) : document.createElement("span");
+        if (!template) {
+          dot.style.cssText =
+            "display:inline-block;width:6px;height:6px;border-radius:50%;" +
+            "background:#f59e0b;margin-left:6px;vertical-align:middle;flex:none";
+        }
+        dot.setAttribute(DOT_MARK, "1");
+        header.appendChild(dot);
+      } else {
+        if (own) own.remove();
+        for (const dot of header.querySelectorAll('span[class*="unreadDot"]')) dot.style.display = "none";
+      }
+    }
+    return true;
+  }
+
   /* ---------------- 复制 ---------------- */
 
   /**
@@ -425,11 +484,18 @@
     stop() {
       disabled = true;
       stopTimer();
+      // 热更新时先把监听器摘掉，否则新旧两套 pointer 监听会叠在一起
+      document.removeEventListener("contextmenu", onPointer, true);
+      document.removeEventListener("pointerdown", onPointer, true);
       for (const node of document.querySelectorAll(`[${MARK}]`)) removeNode(node);
       return "stopped";
     },
     get marks() {
       return document.querySelectorAll(`[${MARK}]`).length;
+    },
+    /** 手动补/收圆点，排查用；返回 false 表示侧栏里找不到这个会话的行 */
+    paint(id, want) {
+      return paintUnread(id, Boolean(want));
     },
     /**
      * 只读快照，排查用。出问题时先看这里，能立刻分清是「没记到会话 ID」
@@ -444,6 +510,7 @@
         items: MENU_ITEMS.map((spec) => spec.key),
         bridgeReady: typeof window.__dshBridgeCall === "function",
         pendingCalls: Object.keys(pendingCalls).length,
+        unreadDots: document.querySelectorAll(`[${DOT_MARK}]`).length,
         disabled,
         menuOpen: Boolean(findMenu()),
         menuItems: findMenu()?.querySelectorAll('button[role="menuitem"]').length ?? 0,

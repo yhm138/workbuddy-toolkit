@@ -2,6 +2,18 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## Unreleased
+
+### 修复
+
+- **「标记未读」点完当场看不到圆点**：db 写进去了、`wb:conversations:list`
+  也立刻返回 `unread:true`，但宿主侧栏用的是自己的渲染状态，要等下一次刷新才
+  读得到（实测过一阵才冒出圆点）。现在注入脚本在点击成功后直接补一个圆点：
+  优先克隆宿主现成的 `_unreadDot_` 节点、样式完全一致；标记已读则只把圆点
+  `display:none`，不删 React 管的节点。db 状态仍是真的，重启或列表刷新后宿主
+  会自己画正式的。`window.__dshCopySessionMenu.paint(id, want)` 可手动调用排查。
+- 顺带让 `stop()` 摘掉 pointer 监听器，热更新时新旧两套监听不会叠在一起。
+
 ## 1.3.0 — 2026-11-07
 
 右键菜单和会话桥面板都能「标记已读 / 标记未读」；顺带把客户端升级后

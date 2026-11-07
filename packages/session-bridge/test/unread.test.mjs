@@ -246,6 +246,15 @@ test("注入脚本三项菜单齐全，未读走 bridgeCall", () => {
   assert.match(INJECT_SRC, /__wbError/, "直达通道也要判假成功");
 });
 
+test("未读圆点即时反馈：点击成功后补/收 DOM 圆点，不删 React 节点", () => {
+  assert.match(INJECT_SRC, /paintUnread\(id, true\)/);
+  assert.match(INJECT_SRC, /paintUnread\(id, false\)/);
+  assert.match(INJECT_SRC, /unreadDot/, "应复用宿主现成的圆点样式");
+  assert.match(INJECT_SRC, /data-dsh-unread-dot/);
+  assert.match(INJECT_SRC, /style\.display = "none"/, "标记已读只隐藏，避免删掉 React 管的节点");
+  assert.match(INJECT_SRC, /template \? template\.cloneNode\(true\)/, "优先克隆宿主圆点，样式才一致");
+});
+
 test("注入器注册 Runtime.addBinding 并监听 Runtime.bindingCalled", () => {
   assert.match(MENU_INJECT_SRC, /Runtime\.addBinding/);
   assert.match(MENU_INJECT_SRC, /Runtime\.bindingCalled/);
