@@ -15,7 +15,10 @@ process.env.WORKBUDDY_MENU_INJECT = "off";
 // 但 CI 还有 Node 20 的 job，那里只能跳过碰数据库的用例（静态断言照跑）。
 let DatabaseSync = null;
 try {
-  ({ DatabaseSync } = require("node:sqlite"));
+  // WORKBUDDY_TEST_NO_SQLITE=1 用来在本机复现 Node 20 的环境
+  if (process.env.WORKBUDDY_TEST_NO_SQLITE !== "1") {
+    ({ DatabaseSync } = require("node:sqlite"));
+  }
 } catch {
   /* Node 20：没有内置 sqlite */
 }
@@ -29,8 +32,10 @@ const INDEX_SRC = fs.readFileSync(path.join(HERE, "..", "extension", "server", "
 const INJECT_SRC = fs.readFileSync(path.join(HERE, "..", "extension", "inject", "session-menu.js"), "utf8");
 const MENU_INJECT_SRC = fs.readFileSync(path.join(HERE, "..", "extension", "server", "menu-inject.cjs"), "utf8");
 
-function tempHome() {
+/** withDb=false 只建空目录：给不需要数据库的 service 用例用（Node 20 也能跑）。 */
+function tempHome(withDb = true) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-unread-"));
+  if (!withDb) return dir;
   const db = new DatabaseSync(path.join(dir, "workbuddy.db"));
   db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, unread INTEGER DEFAULT 0)");
   db.prepare("INSERT INTO sessions (id, unread) VALUES (?, ?)").run("a-1", 0);
@@ -139,7 +144,7 @@ dbTest("unreadState：把 db 状态原样交给面板", async () => {
 });
 
 test("markRead：走宿主通道，参数是裸 conversationId", async () => {
-  const home = tempHome();
+  const home = tempHome(false);
   const calls = [];
   try {
     await withService(home, async (ch, ...args) => { calls.push([ch, args]); }, async (methods) => {
@@ -154,7 +159,7 @@ test("markRead：走宿主通道，参数是裸 conversationId", async () => {
 });
 
 test("markRead：宿主 resolve 一个 __wbError 时必须抛，不能假装成功", async () => {
-  const home = tempHome();
+  const home = tempHome(false);
   try {
     await withService(home, async () => ({ __wbError: true, message: "no handler" }), async (methods) => {
       await assert.rejects(() => methods.markRead({}, { conversationId: "a-1" }), /宿主标记已读失败：no handler/);
@@ -165,7 +170,7 @@ test("markRead：宿主 resolve 一个 __wbError 时必须抛，不能假装成�
 });
 
 test("markRead / markUnread：缺 id 直接拒绝", async () => {
-  const home = tempHome();
+  const home = tempHome(false);
   try {
     await withService(home, async () => undefined, async (methods) => {
       await assert.rejects(() => methods.markRead({}, {}), /缺少 conversationId/);
